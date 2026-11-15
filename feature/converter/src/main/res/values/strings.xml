@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="converter_title">AI Voice</string>
+
+    <string name="converter_models_header">Models</string>
+    <string name="converter_models_missing">Missing contentvec.onnx and/or rmvpe.onnx. Put both shared models in the folder below.</string>
+    <string name="converter_models_missing_short">Shared models (contentvec.onnx, rmvpe.onnx) not found</string>
+    <string name="converter_models_dir">Folder: %1$s</string>
+    <string name="converter_no_voices">No voice models. Drop a voice net_g .onnx into the folder, then Scan.</string>
+    <string name="converter_scan">Scan folder</string>
+
+    <string name="converter_record_header">Your voice</string>
+    <string name="converter_record">Record</string>
+    <string name="converter_stop">Stop</string>
+    <string name="converter_play_original">Original</string>
+
+    <string name="converter_transpose">Transpose: %1$d st</string>
+    <string name="converter_sample_rate">Model sample rate (try another if the result sounds slow/fast)</string>
+
+    <string name="converter_convert">Convert</string>
+    <string name="converter_converting">Converting…</string>
+    <string name="converter_play_result">Result</string>
+    <string name="converter_save">Save WAV</string>
+    <string name="converter_saved">Saved: %1$s</string>
+
+    <string name="converter_live_header">Realtime (test)</string>
+    <string name="converter_live_hint">Live mic → converted playback. On a slower phone it stutters/lags — that\'s the hardware limit, not a bug. Use headphones.</string>
+    <string name="converter_live">Start live</string>
+    <string name="converter_live_stop">Stop live</string>
+
+    <string name="converter_need_voice">Pick a voice model first</string>
+    <string name="converter_need_recording">Record something first</string>
+    <string name="converter_permission_denied">Microphone permission denied</string>
+</resources>

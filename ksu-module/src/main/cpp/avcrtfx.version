@@ -1,0 +1,8 @@
+{
+    global:
+        # Linker reads this literally (NOT preprocessed) — must be the real symbol name AELI,
+        # which is what AUDIO_EFFECT_LIBRARY_INFO_SYM expands to and what the factory dlsym's.
+        AELI;
+    local:
+        *;
+};

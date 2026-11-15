@@ -1,0 +1,12 @@
+# AVCRT module SELinux rules (Magisk applies these at boot).
+#
+# The universal voice hook (libavcrt_afhook.so) is ptrace-injected into audioserver, where it
+# installs an inline hook. The inline hook builds a trampoline in anonymous RWX memory, which needs
+# `execmem` — and the audioserver domain ENFORCES it even when the device is globally permissive
+# (the avc denial shows permissive=0 for u:r:audioserver:s0). Without this the trampoline's
+# mprotect(PROT_EXEC) fails and the hook silently skips. (The target-code write itself goes through
+# /proc/self/mem, so no execmod is needed.)
+allow audioserver audioserver process execmem
+
+# avcrtd (u:r:magisk:s0) ptrace-attaches to audioserver to remote-dlopen the hook .so.
+allow magisk audioserver process ptrace

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="home_title">AVCRT</string>
+    <string name="home_master_switch_title">Системный голос</string>
+    <string name="home_master_switch_on">Вкл</string>
+    <string name="home_master_switch_off">Выкл</string>
+    <string name="home_active_preset_label">Активный пресет</string>
+    <string name="home_no_preset">Пресет не выбран</string>
+    <string name="home_pick_preset">Выбрать пресет</string>
+    <string name="home_root_status_label">Root</string>
+    <string name="home_root_status_unknown">Проверяем…</string>
+    <string name="home_root_status_unavailable">Недоступен</string>
+    <string name="home_root_status_granted_ksu">Получен (KernelSU)</string>
+    <string name="home_root_status_granted_magisk">Получен (Magisk)</string>
+    <string name="home_root_status_granted_generic">Получен (su)</string>
+    <string name="home_root_status_denied">Отклонён</string>
+    <string name="home_root_request">Запросить root</string>
+    <string name="home_module_install">Установить модуль</string>
+    <string name="home_module_installed">Модуль установлен</string>
+    <string name="home_module_needs_reboot">Нужна перезагрузка</string>
+    <string name="home_reboot_action">Перезагрузить устройство</string>
+    <string name="home_engine_idle">Простой</string>
+    <string name="home_engine_running">Работает</string>
+    <string name="home_engine_error">Ошибка: %1$s</string>
+    <string name="home_floating_window_title">Плавающее окно</string>
+    <string name="home_floating_window_desc">Быстрые кнопки поверх других приложений</string>
+</resources>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Only used by the launcher icon. Material You will derive every other color
+         dynamically from the wallpaper at runtime. -->
+    <color name="launcher_background">#FF5B3FB1</color>
+</resources>

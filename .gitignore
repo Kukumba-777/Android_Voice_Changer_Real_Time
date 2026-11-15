@@ -1,0 +1,47 @@
+*.iml
+.gradle
+**/.gradle/
+/local.properties
+/.idea/*
+!.idea/codeStyles
+!.idea/inspectionProfiles
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+*.env
+.env.*
+!.env.example
+**/build/
+*.apk
+*.aab
+*.idsig
+*.jks
+*.keystore
+keystore.properties
+release/
+logs/
+clang-r547379/
+*.zip
+/.claude/
+/.kotlin/
+# Native build artifacts
+**/.cxx/
+**/cmake-build-*/
+
+# Bundled module artifacts (generated at build time)
+app/src/main/assets/avcrt-module.zip
+ksu-module/build/
+
+# Local RVC checkout, model weights and conversion outputs
+/rvc_convert/rvc/
+/rvc_convert/*.pth
+/rvc_convert/*.onnx
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/

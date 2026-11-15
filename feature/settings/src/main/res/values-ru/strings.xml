@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_title">Настройки</string>
+
+    <string name="settings_section_appearance">Внешний вид</string>
+    <string name="settings_theme_mode_title">Тема</string>
+    <string name="settings_theme_mode_system">Как в системе</string>
+    <string name="settings_theme_mode_light">Светлая</string>
+    <string name="settings_theme_mode_dark">Тёмная</string>
+    <string name="settings_dynamic_color_title">Material You — цвета из обоев</string>
+    <string name="settings_dynamic_color_subtitle">Использовать цветовую палитру из обоев системы.</string>
+
+    <string name="settings_section_locale">Язык</string>
+    <string name="settings_locale_title">Язык интерфейса</string>
+    <string name="settings_locale_system">Как в системе</string>
+    <string name="settings_locale_en">English</string>
+    <string name="settings_locale_ru">Русский</string>
+
+    <string name="settings_section_engine">Голосовой движок</string>
+    <string name="settings_engine_enabled_title">Включать при запуске</string>
+    <string name="settings_engine_enabled_subtitle">Автоматически запускать изменение голоса при открытии приложения.</string>
+
+    <string name="settings_section_experimental">Экспериментальное</string>
+    <string name="settings_experimental_title">Экспериментальные эффекты</string>
+    <string name="settings_experimental_subtitle">Открывает продвинутые эффекты (спектральные, авто-тюн, гармонайзер) в редакторе пресета. Они добавляют задержку (слышно на звонках) и могут искажать звук — на свой риск.</string>
+
+    <string name="settings_section_root">Система</string>
+    <string name="settings_root_title">Root</string>
+
+    <string name="settings_section_about">О приложении</string>
+    <string name="settings_about_version">Версия</string>
+    <string name="settings_about_build">Сборка</string>
+</resources>

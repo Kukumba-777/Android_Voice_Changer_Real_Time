@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+        Base XML theme — Compose owns the actual Material 3 color/typography/shape system.
+        We only need a no-action-bar Material theme so the Activity hosts Compose properly,
+        plus an edge-to-edge friendly status/nav bar.
+    -->
+    <style name="Theme.AVCRT" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:windowLayoutInDisplayCutoutMode" tools:targetApi="o_mr1">shortEdges</item>
+        <item name="android:enforceStatusBarContrast" tools:targetApi="q">false</item>
+        <item name="android:enforceNavigationBarContrast" tools:targetApi="q">false</item>
+    </style>
+
+    <!--
+        Splash theme used while Activity inflates. Inherits the Material 3 splash spec.
+        AndroidX SplashScreen API will swap it to Theme.AVCRT in MainActivity.onCreate.
+    -->
+    <style name="Theme.AVCRT.Splash" parent="Theme.AVCRT">
+        <item name="android:windowSplashScreenBackground" tools:targetApi="s">?attr/colorSurface</item>
+    </style>
+</resources>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AVCRT</string>
+    <string name="app_full_name">Android Voice Changer Real Time</string>
+
+    <string name="nav_home">Home</string>
+    <string name="nav_presets">Presets</string>
+    <string name="nav_converter">AI</string>
+    <string name="nav_logs">Logs</string>
+    <string name="nav_settings">Settings</string>
+</resources>

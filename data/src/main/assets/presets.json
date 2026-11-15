@@ -1,0 +1,338 @@
+{
+  "version": 1,
+  "presets": [
+    {
+      "id": "builtin.female",
+      "iconKey": "female",
+      "tags": ["builtin", "female"],
+      "names": {
+        "en": "Female voice",
+        "ru": "Женский голос"
+      },
+      "descriptions": {
+        "en": "Higher pitch with formant shift — sounds feminine but still natural.",
+        "ru": "Повышенный тон со сдвигом формант — звучит женственно, но естественно."
+      },
+      "dsp": {
+        "pitchSemitones": 6.0,
+        "formantSemitones": 4.0,
+        "timeRatio": 1.0,
+        "gainDb": 1.0,
+        "crispness": 5,
+        "preserveFormants": true
+      }
+    },
+    {
+      "id": "builtin.male_low",
+      "iconKey": "male_low",
+      "tags": ["builtin", "male", "low"],
+      "names": {
+        "en": "Deep male voice",
+        "ru": "Низкий мужской голос"
+      },
+      "descriptions": {
+        "en": "Pitch dropped about half an octave with formant correction — bass register without sounding chipmunked.",
+        "ru": "Тон опущен примерно на пол-октавы с коррекцией формант — басовитый регистр без эффекта «бурундука»."
+      },
+      "dsp": {
+        "pitchSemitones": -6.0,
+        "formantSemitones": -3.0,
+        "timeRatio": 1.0,
+        "gainDb": 2.0,
+        "crispness": 5,
+        "preserveFormants": true
+      }
+    },
+    {
+      "id": "builtin.robot",
+      "iconKey": "robot",
+      "tags": ["builtin", "fx", "robot"],
+      "names": {
+        "en": "Robot",
+        "ru": "Робот"
+      },
+      "descriptions": {
+        "en": "Classic ring-modulated robotic voice.",
+        "ru": "Классический роботизированный голос на кольцевом модуляторе."
+      },
+      "dsp": {
+        "pitchSemitones": 0.0,
+        "formantSemitones": 0.0,
+        "gainDb": 0.0,
+        "preserveFormants": true,
+        "fx": {
+          "ringmod": { "enabled": true, "carrierHz": 110.0, "mix": 0.9 }
+        }
+      }
+    },
+    {
+      "id": "builtin.monster",
+      "iconKey": "monster",
+      "tags": ["builtin", "fx", "monster"],
+      "names": {
+        "en": "Monster",
+        "ru": "Монстр"
+      },
+      "descriptions": {
+        "en": "Deep pitched-down voice with a growling distortion.",
+        "ru": "Глубоко пониженный голос с рычащим искажением."
+      },
+      "dsp": {
+        "pitchSemitones": -9.0,
+        "formantSemitones": 0.0,
+        "gainDb": 0.0,
+        "preserveFormants": false,
+        "fx": {
+          "distortion": { "enabled": true, "drive": 4.0, "mix": 0.4 }
+        }
+      }
+    },
+    {
+      "id": "builtin.alien",
+      "iconKey": "alien",
+      "tags": ["builtin", "fx", "alien"],
+      "names": {
+        "en": "Alien",
+        "ru": "Пришелец"
+      },
+      "descriptions": {
+        "en": "Pitched up with ring modulation and chorus — otherworldly.",
+        "ru": "Повышенный тон с кольцевой модуляцией и хорусом — неземное звучание."
+      },
+      "dsp": {
+        "pitchSemitones": 3.0,
+        "formantSemitones": 0.0,
+        "gainDb": 0.0,
+        "preserveFormants": false,
+        "fx": {
+          "ringmod": { "enabled": true, "carrierHz": 280.0, "mix": 0.35 },
+          "chorus": { "enabled": true, "rateHz": 2.0, "depth": 0.5, "mix": 0.45 }
+        }
+      }
+    },
+    {
+      "id": "builtin.helium",
+      "iconKey": "helium",
+      "tags": ["builtin", "fx", "helium"],
+      "names": {
+        "en": "Helium",
+        "ru": "Гелий"
+      },
+      "descriptions": {
+        "en": "Extreme pitch-up chipmunk effect.",
+        "ru": "Экстремально высокий тон — эффект «бурундука»."
+      },
+      "dsp": {
+        "pitchSemitones": 10.0,
+        "formantSemitones": 0.0,
+        "gainDb": 0.0,
+        "preserveFormants": false
+      }
+    },
+    {
+      "id": "builtin.cathedral",
+      "iconKey": "cathedral",
+      "tags": ["builtin", "fx", "reverb"],
+      "names": {
+        "en": "Cathedral",
+        "ru": "Собор"
+      },
+      "descriptions": {
+        "en": "Big, long reverb — like speaking in a vast hall.",
+        "ru": "Большая длинная реверберация — как речь в огромном зале."
+      },
+      "dsp": {
+        "pitchSemitones": 0.0,
+        "formantSemitones": 0.0,
+        "gainDb": 0.0,
+        "preserveFormants": true,
+        "fx": {
+          "reverb": { "enabled": true, "roomSize": 0.85, "damping": 0.3, "wet": 0.3 }
+        }
+      }
+    },
+    {
+      "id": "builtin.stadium",
+      "iconKey": "stadium",
+      "tags": ["builtin", "fx", "reverb", "echo"],
+      "names": {
+        "en": "Stadium",
+        "ru": "Стадион"
+      },
+      "descriptions": {
+        "en": "Reverb plus a slap-back echo for a big open-air feel.",
+        "ru": "Реверберация и короткое эхо — ощущение открытого пространства."
+      },
+      "dsp": {
+        "pitchSemitones": 0.0,
+        "formantSemitones": 0.0,
+        "gainDb": 0.0,
+        "preserveFormants": true,
+        "fx": {
+          "reverb": { "enabled": true, "roomSize": 0.75, "damping": 0.35, "wet": 0.25 },
+          "echo": { "enabled": true, "timeMs": 130.0, "feedback": 0.25, "mix": 0.2 }
+        }
+      }
+    },
+    {
+      "id": "builtin.telephone",
+      "iconKey": "phone",
+      "tags": ["builtin", "fx", "telephone"],
+      "names": {
+        "en": "Telephone",
+        "ru": "Телефон"
+      },
+      "descriptions": {
+        "en": "Narrow 300–3400 Hz band — sounds like a phone line.",
+        "ru": "Узкая полоса 300–3400 Гц — звук телефонной линии."
+      },
+      "dsp": {
+        "pitchSemitones": 0.0,
+        "formantSemitones": 0.0,
+        "gainDb": 2.0,
+        "preserveFormants": true,
+        "fx": {
+          "telephone": { "enabled": true }
+        }
+      }
+    },
+    {
+      "id": "builtin.megaphone",
+      "iconKey": "megaphone",
+      "tags": ["builtin", "fx", "megaphone"],
+      "names": {
+        "en": "Megaphone",
+        "ru": "Мегафон"
+      },
+      "descriptions": {
+        "en": "Band-limited and distorted with compression — a loud-hailer.",
+        "ru": "Полосовой фильтр с искажением и компрессией — звук мегафона."
+      },
+      "dsp": {
+        "pitchSemitones": 0.0,
+        "formantSemitones": 0.0,
+        "gainDb": 0.0,
+        "preserveFormants": true,
+        "fx": {
+          "telephone": { "enabled": true },
+          "distortion": { "enabled": true, "drive": 6.0, "mix": 0.5 },
+          "compressor": { "enabled": true, "thresholdDb": -20.0, "ratio": 4.0, "attackMs": 5.0, "releaseMs": 120.0, "makeupDb": 2.0 }
+        }
+      }
+    },
+    {
+      "id": "builtin.underwater",
+      "iconKey": "water",
+      "tags": ["builtin", "fx", "underwater"],
+      "names": {
+        "en": "Underwater",
+        "ru": "Под водой"
+      },
+      "descriptions": {
+        "en": "Muffled low-pass with wobbly chorus and vibrato.",
+        "ru": "Приглушённый низкочастотный фильтр с плавающим хорусом и вибрато."
+      },
+      "dsp": {
+        "pitchSemitones": -2.0,
+        "formantSemitones": 0.0,
+        "gainDb": 0.0,
+        "preserveFormants": true,
+        "fx": {
+          "filter": { "enabled": true, "lpHz": 900.0, "q": 0.9 },
+          "chorus": { "enabled": true, "rateHz": 0.8, "depth": 0.6, "mix": 0.5 },
+          "vibrato": { "enabled": true, "rateHz": 2.0, "depth": 0.3 }
+        }
+      }
+    },
+    {
+      "id": "builtin.drunk",
+      "iconKey": "drunk",
+      "tags": ["builtin", "fx", "drunk"],
+      "names": {
+        "en": "Drunk",
+        "ru": "Пьяный"
+      },
+      "descriptions": {
+        "en": "Slow, deep vibrato — a woozy, swaying voice.",
+        "ru": "Медленное глубокое вибрато — «качающийся» голос."
+      },
+      "dsp": {
+        "pitchSemitones": -1.0,
+        "formantSemitones": 0.0,
+        "gainDb": 0.0,
+        "preserveFormants": true,
+        "fx": {
+          "vibrato": { "enabled": true, "rateHz": 1.6, "depth": 0.55 }
+        }
+      }
+    },
+    {
+      "id": "builtin.fan",
+      "iconKey": "fan",
+      "tags": ["builtin", "fx", "tremolo"],
+      "names": {
+        "en": "Fan",
+        "ru": "Вентилятор"
+      },
+      "descriptions": {
+        "en": "Fast amplitude tremolo — talking into a spinning fan.",
+        "ru": "Быстрое амплитудное тремоло — голос «в вентилятор»."
+      },
+      "dsp": {
+        "pitchSemitones": 0.0,
+        "formantSemitones": 0.0,
+        "gainDb": 0.0,
+        "preserveFormants": true,
+        "fx": {
+          "tremolo": { "enabled": true, "rateHz": 7.0, "depth": 0.8, "shape": 0 }
+        }
+      }
+    },
+    {
+      "id": "builtin.cyborg",
+      "iconKey": "cyborg",
+      "tags": ["builtin", "fx", "cyborg"],
+      "names": {
+        "en": "Cyborg",
+        "ru": "Киборг"
+      },
+      "descriptions": {
+        "en": "Lo-fi bit-reduced voice with a touch of ring modulation.",
+        "ru": "Lo-fi голос с понижением битности и лёгкой кольцевой модуляцией."
+      },
+      "dsp": {
+        "pitchSemitones": -2.0,
+        "formantSemitones": 0.0,
+        "gainDb": 0.0,
+        "preserveFormants": false,
+        "fx": {
+          "bitcrush": { "enabled": true, "bits": 8.0, "downsample": 2.0, "mix": 0.5 },
+          "ringmod": { "enabled": true, "carrierHz": 130.0, "mix": 0.35 }
+        }
+      }
+    },
+    {
+      "id": "builtin.space",
+      "iconKey": "space",
+      "tags": ["builtin", "fx", "phaser"],
+      "names": {
+        "en": "Space",
+        "ru": "Космос"
+      },
+      "descriptions": {
+        "en": "Sweeping phaser into a spacious reverb.",
+        "ru": "Плавающий фейзер с просторной реверберацией."
+      },
+      "dsp": {
+        "pitchSemitones": 0.0,
+        "formantSemitones": 0.0,
+        "gainDb": 0.0,
+        "preserveFormants": true,
+        "fx": {
+          "phaser": { "enabled": true, "rateHz": 0.4, "depth": 0.8, "feedback": 0.45, "mix": 0.55 },
+          "reverb": { "enabled": true, "roomSize": 0.7, "damping": 0.4, "wet": 0.28 }
+        }
+      }
+    }
+  ]
+}

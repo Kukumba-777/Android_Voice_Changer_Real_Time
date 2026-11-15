@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="presets_title">Presets</string>
+    <string name="presets_builtin_section">Built-in</string>
+    <string name="presets_custom_section">Custom</string>
+    <string name="presets_apply">Apply</string>
+    <string name="presets_applied">Active</string>
+    <string name="presets_create_custom">Create custom</string>
+    <string name="presets_custom_empty">No custom presets yet — tap “Create custom” to design your own voice.</string>
+    <string name="presets_pitch">Pitch</string>
+    <string name="presets_formant">Formant</string>
+    <string name="presets_semitones_short">st</string>
+
+    <!-- Card overflow menu -->
+    <string name="presets_menu">More</string>
+    <string name="presets_edit">Edit</string>
+    <string name="presets_delete">Delete</string>
+    <string name="presets_duplicate">Duplicate to custom</string>
+    <string name="presets_cancel">Cancel</string>
+
+    <!-- Preset editor -->
+    <string name="presets_editor_create_title">Create preset</string>
+    <string name="presets_editor_edit_title">Edit preset</string>
+    <string name="presets_editor_back">Back</string>
+    <string name="presets_editor_save">Save</string>
+    <string name="presets_editor_name">Name</string>
+    <string name="presets_editor_name_required">Name can’t be empty</string>
+    <string name="presets_editor_description">Description (optional)</string>
+    <string name="presets_editor_section_voice">Voice</string>
+    <string name="presets_editor_gain">Gain</string>
+    <string name="presets_editor_db_short">dB</string>
+    <string name="presets_editor_formant_hint">Best-effort on SoundTouch — affects the sound when “Preserve formants” is on.</string>
+    <string name="presets_editor_preserve_formants">Preserve formants</string>
+    <string name="presets_editor_preserve_formants_hint">Keeps the voice natural on large pitch shifts.</string>
+    <string name="presets_editor_apply_after">Apply after saving</string>
+    <string name="presets_editor_crispness">Crispness</string>
+    <string name="presets_editor_crispness_hint">Higher = sharper/crisper, lower = smoother.</string>
+    <string name="presets_editor_test_record">Record voice</string>
+    <string name="presets_editor_test_recording">Recording… %1$d/%2$d s</string>
+    <string name="presets_editor_test_stop">Stop</string>
+    <string name="presets_editor_test_listen">Listen</string>
+    <string name="presets_editor_test_again">Again</string>
+    <string name="presets_editor_test_playing">Playing… (tap to stop)</string>
+    <string name="presets_editor_reset">Reset to defaults</string>
+    <string name="presets_editor_delete">Delete preset</string>
+    <string name="presets_editor_delete_confirm_title">Delete preset?</string>
+    <string name="presets_editor_delete_confirm_text">This custom preset will be removed.</string>
+
+    <!-- Effects (Phase 6) -->
+    <string name="presets_fx_section">Effects</string>
+    <string name="presets_fx_gate">Noise gate</string>
+    <string name="presets_fx_eq">Equalizer</string>
+    <string name="presets_fx_telephone">Telephone</string>
+    <string name="presets_fx_ringmod">Ring mod (robot)</string>
+    <string name="presets_fx_tremolo">Tremolo (fan)</string>
+    <string name="presets_fx_distortion">Distortion</string>
+    <string name="presets_fx_echo">Echo</string>
+    <string name="presets_fx_reverb">Reverb</string>
+    <string name="presets_fx_threshold">Threshold</string>
+    <string name="presets_fx_attack">Attack</string>
+    <string name="presets_fx_release">Release</string>
+    <string name="presets_fx_low">Low</string>
+    <string name="presets_fx_mid">Mid</string>
+    <string name="presets_fx_high">High</string>
+    <string name="presets_fx_carrier">Carrier</string>
+    <string name="presets_fx_mix">Mix</string>
+    <string name="presets_fx_rate">Rate</string>
+    <string name="presets_fx_depth">Depth</string>
+    <string name="presets_fx_shape">Shape</string>
+    <string name="presets_fx_shape_sine">Sine</string>
+    <string name="presets_fx_shape_tri">Triangle</string>
+    <string name="presets_fx_shape_square">Square</string>
+    <string name="presets_fx_drive">Drive</string>
+    <string name="presets_fx_time">Time</string>
+    <string name="presets_fx_feedback">Feedback</string>
+    <string name="presets_fx_room">Room size</string>
+    <string name="presets_fx_damping">Damping</string>
+    <string name="presets_fx_wet">Wet</string>
+
+    <!-- Effects (Phase 6, Tier-2) -->
+    <string name="presets_fx_filter">Filter (LP/HP)</string>
+    <string name="presets_fx_hp">High-pass</string>
+    <string name="presets_fx_lp">Low-pass</string>
+    <string name="presets_fx_resonance">Resonance</string>
+    <string name="presets_fx_vibrato">Vibrato</string>
+    <string name="presets_fx_chorus">Chorus</string>
+    <string name="presets_fx_flanger">Flanger</string>
+    <string name="presets_fx_phaser">Phaser</string>
+    <string name="presets_fx_autowah">Auto-wah</string>
+    <string name="presets_fx_sensitivity">Sensitivity</string>
+    <string name="presets_fx_base_freq">Base freq</string>
+    <string name="presets_fx_range">Range</string>
+    <string name="presets_fx_bitcrush">Bitcrusher</string>
+    <string name="presets_fx_bits">Bits</string>
+    <string name="presets_fx_downsample">Downsample</string>
+    <string name="presets_fx_compressor">Compressor</string>
+    <string name="presets_fx_ratio">Ratio</string>
+    <string name="presets_fx_makeup">Makeup gain</string>
+
+    <!-- Effects (Phase 6, Tier-3: channel-vocoder family) -->
+    <string name="presets_fx_formant">Formant (m↔f)</string>
+    <string name="presets_fx_formant_shift">Shift</string>
+    <string name="presets_fx_vocoder">Vocoder</string>
+    <string name="presets_fx_whisper">Whisper</string>
+    <string name="presets_fx_carrier_type">Carrier</string>
+    <string name="presets_fx_carrier_saw">Saw</string>
+    <string name="presets_fx_carrier_pulse">Pulse</string>
+    <string name="presets_fx_carrier_noise">Noise</string>
+
+    <!-- Experimental group (Phase 7, behind Settings → Experimental) -->
+    <string name="presets_fx_experimental_section">Experimental</string>
+    <string name="presets_fx_experimental_hint">Advanced effects — they add a little latency (noticeable on calls) and can distort. Coming online stage by stage.</string>
+    <string name="presets_fx_spec_robot">Spectral robot</string>
+    <string name="presets_fx_spec_whisper">Spectral whisper</string>
+    <string name="presets_fx_spec_freeze">Spectral freeze</string>
+    <string name="presets_fx_spec_blur">Spectral blur</string>
+    <string name="presets_fx_spec_strength">Spectral strength</string>
+    <string name="presets_fx_autotune">Auto-tune</string>
+    <string name="presets_fx_strength">Strength</string>
+    <string name="presets_fx_harmonizer">Harmonizer</string>
+    <string name="presets_fx_interval1">Voice 1</string>
+    <string name="presets_fx_interval2">Voice 2</string>
+</resources>

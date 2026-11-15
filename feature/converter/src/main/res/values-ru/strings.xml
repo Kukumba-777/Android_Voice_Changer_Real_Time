@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="converter_title">AI-голос</string>
+
+    <string name="converter_models_header">Модели</string>
+    <string name="converter_models_missing">Нет contentvec.onnx и/или rmvpe.onnx. Положи обе общие модели в папку ниже.</string>
+    <string name="converter_models_missing_short">Общие модели (contentvec.onnx, rmvpe.onnx) не найдены</string>
+    <string name="converter_models_dir">Папка: %1$s</string>
+    <string name="converter_no_voices">Нет голосов. Положи голосовую модель net_g .onnx в папку и нажми «Сканировать».</string>
+    <string name="converter_scan">Сканировать папку</string>
+
+    <string name="converter_record_header">Твой голос</string>
+    <string name="converter_record">Записать</string>
+    <string name="converter_stop">Стоп</string>
+    <string name="converter_play_original">Оригинал</string>
+
+    <string name="converter_transpose">Транспонирование: %1$d пт</string>
+    <string name="converter_sample_rate">Частота модели (поменяй, если звук замедлен/ускорен)</string>
+
+    <string name="converter_convert">Конвертировать</string>
+    <string name="converter_converting">Конвертация…</string>
+    <string name="converter_play_result">Результат</string>
+    <string name="converter_save">Сохранить WAV</string>
+    <string name="converter_saved">Сохранено: %1$s</string>
+
+    <string name="converter_live_header">Realtime (тест)</string>
+    <string name="converter_live_hint">Микрофон → изменённый звук вживую. На слабом телефоне будет заикаться/отставать — это потолок железа, не баг. Используй наушники.</string>
+    <string name="converter_live">Запустить live</string>
+    <string name="converter_live_stop">Стоп live</string>
+
+    <string name="converter_need_voice">Сначала выбери голос</string>
+    <string name="converter_need_recording">Сначала запиши голос</string>
+    <string name="converter_permission_denied">Нет доступа к микрофону</string>
+</resources>

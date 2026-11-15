@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="presets_title">Пресеты</string>
+    <string name="presets_builtin_section">Встроенные</string>
+    <string name="presets_custom_section">Пользовательские</string>
+    <string name="presets_apply">Применить</string>
+    <string name="presets_applied">Активен</string>
+    <string name="presets_create_custom">Создать свой</string>
+    <string name="presets_custom_empty">Пока нет своих пресетов — нажмите «Создать свой», чтобы настроить голос.</string>
+    <string name="presets_pitch">Тон</string>
+    <string name="presets_formant">Форманта</string>
+    <string name="presets_semitones_short">пт</string>
+
+    <!-- Меню карточки -->
+    <string name="presets_menu">Ещё</string>
+    <string name="presets_edit">Изменить</string>
+    <string name="presets_delete">Удалить</string>
+    <string name="presets_duplicate">Скопировать в свои</string>
+    <string name="presets_cancel">Отмена</string>
+
+    <!-- Редактор пресета -->
+    <string name="presets_editor_create_title">Создать пресет</string>
+    <string name="presets_editor_edit_title">Изменить пресет</string>
+    <string name="presets_editor_back">Назад</string>
+    <string name="presets_editor_save">Сохранить</string>
+    <string name="presets_editor_name">Название</string>
+    <string name="presets_editor_name_required">Название не может быть пустым</string>
+    <string name="presets_editor_description">Описание (необязательно)</string>
+    <string name="presets_editor_section_voice">Голос</string>
+    <string name="presets_editor_gain">Громкость</string>
+    <string name="presets_editor_db_short">дБ</string>
+    <string name="presets_editor_formant_hint">Приблизительно (SoundTouch) — влияет на звук, когда включено «Сохранять форманты».</string>
+    <string name="presets_editor_preserve_formants">Сохранять форманты</string>
+    <string name="presets_editor_preserve_formants_hint">Сохраняет естественность голоса при сильном сдвиге тона.</string>
+    <string name="presets_editor_apply_after">Применить после сохранения</string>
+    <string name="presets_editor_crispness">Чёткость</string>
+    <string name="presets_editor_crispness_hint">Выше — чётче/резче, ниже — глаже.</string>
+    <string name="presets_editor_test_record">Записать голос</string>
+    <string name="presets_editor_test_recording">Запись… %1$d/%2$d с</string>
+    <string name="presets_editor_test_stop">Стоп</string>
+    <string name="presets_editor_test_listen">Прослушать</string>
+    <string name="presets_editor_test_again">Заново</string>
+    <string name="presets_editor_test_playing">Воспроизведение… (нажмите, чтобы остановить)</string>
+    <string name="presets_editor_reset">Сбросить</string>
+    <string name="presets_editor_delete">Удалить пресет</string>
+    <string name="presets_editor_delete_confirm_title">Удалить пресет?</string>
+    <string name="presets_editor_delete_confirm_text">Этот пользовательский пресет будет удалён.</string>
+
+    <!-- Эффекты (Фаза 6) -->
+    <string name="presets_fx_section">Эффекты</string>
+    <string name="presets_fx_gate">Шумоподавление</string>
+    <string name="presets_fx_eq">Эквалайзер</string>
+    <string name="presets_fx_telephone">Телефон</string>
+    <string name="presets_fx_ringmod">Кольцевой модулятор (робот)</string>
+    <string name="presets_fx_tremolo">Тремоло (вентилятор)</string>
+    <string name="presets_fx_distortion">Искажение</string>
+    <string name="presets_fx_echo">Эхо</string>
+    <string name="presets_fx_reverb">Реверберация</string>
+    <string name="presets_fx_threshold">Порог</string>
+    <string name="presets_fx_attack">Атака</string>
+    <string name="presets_fx_release">Спад</string>
+    <string name="presets_fx_low">Низкие</string>
+    <string name="presets_fx_mid">Средние</string>
+    <string name="presets_fx_high">Высокие</string>
+    <string name="presets_fx_carrier">Частота</string>
+    <string name="presets_fx_mix">Микс</string>
+    <string name="presets_fx_rate">Скорость</string>
+    <string name="presets_fx_depth">Глубина</string>
+    <string name="presets_fx_shape">Форма</string>
+    <string name="presets_fx_shape_sine">Синус</string>
+    <string name="presets_fx_shape_tri">Треугольник</string>
+    <string name="presets_fx_shape_square">Квадрат</string>
+    <string name="presets_fx_drive">Драйв</string>
+    <string name="presets_fx_time">Время</string>
+    <string name="presets_fx_feedback">Обратная связь</string>
+    <string name="presets_fx_room">Размер</string>
+    <string name="presets_fx_damping">Затухание</string>
+    <string name="presets_fx_wet">Уровень</string>
+
+    <!-- Эффекты (Фаза 6, Tier-2) -->
+    <string name="presets_fx_filter">Фильтр (LP/HP)</string>
+    <string name="presets_fx_hp">Фильтр ВЧ</string>
+    <string name="presets_fx_lp">Фильтр НЧ</string>
+    <string name="presets_fx_resonance">Резонанс</string>
+    <string name="presets_fx_vibrato">Вибрато</string>
+    <string name="presets_fx_chorus">Хорус</string>
+    <string name="presets_fx_flanger">Флэнджер</string>
+    <string name="presets_fx_phaser">Фейзер</string>
+    <string name="presets_fx_autowah">Авто-вау</string>
+    <string name="presets_fx_sensitivity">Чувствительность</string>
+    <string name="presets_fx_base_freq">Базовая частота</string>
+    <string name="presets_fx_range">Диапазон</string>
+    <string name="presets_fx_bitcrush">Биткрашер</string>
+    <string name="presets_fx_bits">Биты</string>
+    <string name="presets_fx_downsample">Прореживание</string>
+    <string name="presets_fx_compressor">Компрессор</string>
+    <string name="presets_fx_ratio">Соотношение</string>
+    <string name="presets_fx_makeup">Компенсация</string>
+
+    <!-- Эффекты (Фаза 6, Tier-3: канальный вокодер) -->
+    <string name="presets_fx_formant">Формант (м↔ж)</string>
+    <string name="presets_fx_formant_shift">Сдвиг</string>
+    <string name="presets_fx_vocoder">Вокодер</string>
+    <string name="presets_fx_whisper">Шёпот</string>
+    <string name="presets_fx_carrier_type">Несущая</string>
+    <string name="presets_fx_carrier_saw">Пила</string>
+    <string name="presets_fx_carrier_pulse">Импульс</string>
+    <string name="presets_fx_carrier_noise">Шум</string>
+
+    <!-- Экспериментальная группа (Фаза 7, за тумблером Настройки → Экспериментальное) -->
+    <string name="presets_fx_experimental_section">Экспериментальные</string>
+    <string name="presets_fx_experimental_hint">Продвинутые эффекты — добавляют небольшую задержку (заметно на звонках) и могут искажать звук. Подключаются поэтапно.</string>
+    <string name="presets_fx_spec_robot">Спектр. робот</string>
+    <string name="presets_fx_spec_whisper">Спектр. шёпот</string>
+    <string name="presets_fx_spec_freeze">Спектр. заморозка</string>
+    <string name="presets_fx_spec_blur">Спектр. размытие</string>
+    <string name="presets_fx_spec_strength">Сила спектра</string>
+    <string name="presets_fx_autotune">Авто-тюн</string>
+    <string name="presets_fx_strength">Сила</string>
+    <string name="presets_fx_harmonizer">Гармонайзер</string>
+    <string name="presets_fx_interval1">Голос 1</string>
+    <string name="presets_fx_interval2">Голос 2</string>
+</resources>

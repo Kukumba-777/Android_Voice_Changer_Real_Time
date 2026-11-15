@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_title">Settings</string>
+
+    <string name="settings_section_appearance">Appearance</string>
+    <string name="settings_theme_mode_title">Theme</string>
+    <string name="settings_theme_mode_system">Follow system</string>
+    <string name="settings_theme_mode_light">Light</string>
+    <string name="settings_theme_mode_dark">Dark</string>
+    <string name="settings_dynamic_color_title">Material You dynamic color</string>
+    <string name="settings_dynamic_color_subtitle">Use colors derived from your wallpaper.</string>
+
+    <string name="settings_section_locale">Language</string>
+    <string name="settings_locale_title">Interface language</string>
+    <string name="settings_locale_system">System default</string>
+    <string name="settings_locale_en">English</string>
+    <string name="settings_locale_ru">Русский</string>
+
+    <string name="settings_section_engine">Voice engine</string>
+    <string name="settings_engine_enabled_title">Auto-enable on launch</string>
+    <string name="settings_engine_enabled_subtitle">Start the voice changer automatically when the app opens.</string>
+
+    <string name="settings_section_experimental">Experimental</string>
+    <string name="settings_experimental_title">Experimental effects</string>
+    <string name="settings_experimental_subtitle">Unlocks advanced effects (spectral, auto-tune, harmonizer) in the custom-preset editor. They add latency (audible on calls) and can distort — use at your own risk.</string>
+
+    <string name="settings_section_root">System</string>
+    <string name="settings_root_title">Root provider</string>
+
+    <string name="settings_section_about">About</string>
+    <string name="settings_about_version">Version</string>
+    <string name="settings_about_build">Build</string>
+</resources>

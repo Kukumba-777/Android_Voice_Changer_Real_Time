@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="home_title">AVCRT</string>
+    <string name="home_master_switch_title">System voice changer</string>
+    <string name="home_master_switch_on">On</string>
+    <string name="home_master_switch_off">Off</string>
+    <string name="home_active_preset_label">Active preset</string>
+    <string name="home_no_preset">No preset selected</string>
+    <string name="home_pick_preset">Pick a preset</string>
+    <string name="home_root_status_label">Root</string>
+    <string name="home_root_status_unknown">Checking…</string>
+    <string name="home_root_status_unavailable">Not available</string>
+    <string name="home_root_status_granted_ksu">Granted (KernelSU)</string>
+    <string name="home_root_status_granted_magisk">Granted (Magisk)</string>
+    <string name="home_root_status_granted_generic">Granted (su)</string>
+    <string name="home_root_status_denied">Denied</string>
+    <string name="home_root_request">Request root</string>
+    <string name="home_module_install">Install module</string>
+    <string name="home_module_installed">Module installed</string>
+    <string name="home_module_needs_reboot">Reboot required</string>
+    <string name="home_reboot_action">Reboot device</string>
+    <string name="home_engine_idle">Idle</string>
+    <string name="home_engine_running">Running</string>
+    <string name="home_engine_error">Error: %1$s</string>
+    <string name="home_floating_window_title">Floating window</string>
+    <string name="home_floating_window_desc">Quick controls over other apps</string>
+</resources>
