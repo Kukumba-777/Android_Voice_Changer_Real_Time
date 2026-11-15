@@ -22,7 +22,7 @@ local.properties
 *.keystore
 keystore.properties
 release/
-logs/
+/logs/
 clang-r547379/
 *.zip
 /.claude/

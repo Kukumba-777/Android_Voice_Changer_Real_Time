@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="logs_title">Logs</string>
+    <string name="logs_filter_all">All</string>
+    <string name="logs_filter_info">Info+</string>
+    <string name="logs_filter_warn">Warn+</string>
+    <string name="logs_filter_error">Error</string>
+    <string name="logs_clear">Clear</string>
+    <string name="logs_share">Share</string>
+    <string name="logs_empty">No log entries yet.</string>
+    <string name="logs_share_subject">AVCRT logs</string>
+    <string name="logs_run_diagnostics">Run diagnostics</string>
+
+    <!-- Multi-source viewer -->
+    <string name="logs_source_app">App</string>
+    <string name="logs_source_daemon">Daemon</string>
+    <string name="logs_source_zygisk">Zygisk</string>
+    <string name="logs_source_kernel">Kernel</string>
+    <string name="logs_refresh">Refresh</string>
+    <string name="logs_empty_source">No entries for this source yet. Tap refresh after using the feature.</string>
+    <string name="logs_error_prefix">Couldn\'t read this log source: %1$s</string>
+</resources>
