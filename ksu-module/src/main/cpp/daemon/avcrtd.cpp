@@ -949,6 +949,15 @@ int run_probe_kcontrol() {
     return ok;
 }
 
+// Read-only probe: a missing mixer is an inspection error, not an absent control.
+int run_probe_cvp() {
+    struct mixer* m = mixer_open(find_lito_card());
+    if (!m) return 2;
+    const bool present = mixer_get_ctl_by_name(m, kCvpRebuildCtl) != nullptr;
+    mixer_close(m);
+    return present ? 0 : 1;
+}
+
 // ---- afhook auto-injection (the universal AudioFlinger-level voice hook) -----
 //
 // The afhook .so (libavcrt_afhook.so) pitches EVERY mic capture that flows through
@@ -1151,8 +1160,12 @@ void restart_audioserver() {
 // swap latch. Called while DISENGAGED (no open capture/inject PCMs to disrupt); the idle loop then
 // re-engages cleanly on the settled accessory. Caller gates on g_cvp_rebuild_present.
 void cvp_rebuild() {
-    fprintf(stderr, "[avcrtd] CVP rebuild (in-kernel vocproc reset — no audioserver restart)\n");
-    mx_set(kCvpRebuildCtl, 1);     // one-shot trigger; the kernel iterates active sessions + auto-clears
+    struct mixer_ctl* ctl = g_mixer ? mixer_get_ctl_by_name(g_mixer, kCvpRebuildCtl) : nullptr;
+    if (!ctl || mixer_ctl_set_value(ctl, 0, 1) < 0) {
+        fprintf(stderr, "[avcrtd] CVP rebuild FAILED — control missing or kernel rejected request; no audioserver restart\n");
+        return;
+    }
+    fprintf(stderr, "[avcrtd] CVP rebuild (in-kernel vocproc reset — no audioserver restart), request completed\n");
     // let voc_disable_device+voc_enable_device complete (it pauses then restarts the voice path).
     for (int i = 0; i < 12 && g_run.load(); ++i) sleep_ms(100);   // ~1.2s
     resolve_cards();
@@ -1185,9 +1198,19 @@ void disengage_and_recover(Session& s) {
 }
 
 int main(int argc, char** argv) {
-    for (int i = 1; i < argc; ++i) {
-        if (strcmp(argv[i], "--unmute") == 0) return run_unmute();
-        if (strcmp(argv[i], "--probe-kcontrol") == 0) return run_probe_kcontrol();
+    // Never let a typo/new probe flag silently start the audio-routing daemon.
+    if (argc == 2) {
+        if (strcmp(argv[1], "--unmute") == 0) return run_unmute();
+        if (strcmp(argv[1], "--probe-kcontrol") == 0) return run_probe_kcontrol();
+        if (strcmp(argv[1], "--probe-cvp") == 0) return run_probe_cvp();
+        if (strcmp(argv[1], "--list-probes") == 0) {
+            puts("--probe-kcontrol\n--probe-cvp");
+            return 0;
+        }
+    }
+    if (argc != 1) {
+        fprintf(stderr, "Usage: %s [--unmute|--probe-kcontrol|--probe-cvp|--list-probes]\n", argv[0]);
+        return 2;
     }
 
     // SINGLE-INSTANCE GUARD. Two daemons fight over pcm 0,0 / 0,23 (capture+inject)

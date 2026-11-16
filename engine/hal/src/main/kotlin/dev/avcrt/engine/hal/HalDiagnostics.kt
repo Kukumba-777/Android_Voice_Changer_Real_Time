@@ -5,6 +5,7 @@ import dev.avcrt.core.common.dispatcher.DispatcherProvider
 import dev.avcrt.core.common.result.AvcrtError
 import dev.avcrt.core.common.result.AvcrtResult
 import dev.avcrt.core.root.RootAccess
+import dev.avcrt.core.root.RootProvider
 import dev.avcrt.core.root.RootStatus
 import dev.avcrt.engine.api.DiagnosticItem
 import dev.avcrt.engine.api.DiagnosticReport
@@ -43,6 +44,7 @@ class HalDiagnostics @Inject constructor(
         val items = buildList {
             add(checkRootProvider())
             add(checkKernelPatch())
+            add(checkCvpRebuildControl())
             add(checkDaemonRunning())
             add(checkDaemonLogTail())
             add(checkZygiskHook())
@@ -65,9 +67,7 @@ class HalDiagnostics @Inject constructor(
     }
 
     /**
-     * Cellular path lives ONLY if the kernel exposes the "AVCRT Dec Mute"
-     * kcontrol. The daemon ships a `--probe-kcontrol` flag that exits 0 when it's
-     * present — the cleanest device-agnostic check.
+     * Checks the codec mute capability, not end-to-end cellular compatibility.
      */
     private suspend fun checkKernelPatch(): DiagnosticItem {
         val bin = "$MODULE_DIR/bin/avcrtd"
@@ -80,15 +80,41 @@ class HalDiagnostics @Inject constructor(
         return if (probe == "present") {
             ok(
                 "Kernel patch",
-                "AVCRT Dec Mute kcontrol present — cellular clean-replace available." +
+                "AVCRT Dec Mute kcontrol present — codec mute capability available; " +
+                    "cellular routing still requires device-specific testing." +
                     if (ourKernel) " (/proc/version is an avcrt build)" else "",
             )
         } else {
             warn(
                 "Kernel patch",
-                "AVCRT Dec Mute kcontrol NOT found — GSM cellular voice-change is OFF (the app/Zygisk " +
-                    "path still works). Flash the patched kernel (avcrt-kernel-release.zip).",
+                "AVCRT Dec Mute not detected (or probe failed). Built-in codec clean-replace " +
+                    "requires this control on Nord; other routes and app hooks must be checked separately. " +
+                    "Do not flash a Nord kernel on another device.",
             )
+        }
+    }
+
+    private suspend fun checkCvpRebuildControl(): DiagnosticItem {
+        val bin = "$MODULE_DIR/bin/avcrtd"
+        if (!rootAccess.fileExists(bin)) {
+            return warn("CVP rebuild", "avcrtd binary missing — install the module first.")
+        }
+        // Older daemons ignore unknown arguments and START instead of probing.
+        // Check a new CLI marker without executing the binary before using a new flag.
+        val supported = sh("grep -a -q -- '--list-probes' '$bin' && echo supported")
+        if (supported != "supported") {
+            return warn("CVP rebuild", "Installed avcrtd has no safe probe capability marker. " +
+                "Update the module; CVP control availability is unknown (daemon was not executed).")
+        }
+        val result = sh("'$bin' --probe-cvp >/dev/null 2>&1; echo \$?")
+        return when (result) {
+            "0" -> ok("CVP rebuild", "AVCRT CVP Rebuild control present. This does not prove " +
+                "successful recovery for every accessory transition.")
+            "1" -> warn("CVP rebuild", "AVCRT CVP Rebuild control absent on the inspected card. " +
+                "Recovery depends on accessory/mode: USB settles without an audioserver restart; " +
+                "other transitions may restart audioserver. Inspect daemon logs.")
+            else -> warn("CVP rebuild", "Unable to inspect CVP control (probe result: $result). " +
+                "This is not evidence that the control is absent.")
         }
     }
 
@@ -127,13 +153,41 @@ class HalDiagnostics @Inject constructor(
                 "zygisk/arm64-v8a.so MISSING in the module — app voice-change won't load. Reinstall the module.",
             )
         }
+        // External Zygisk providers can be used with KSU or Magisk. Inspect only
+        // id/name metadata, not arbitrary descriptions (including our own module).
+        val external = sh("""
+            for d in /data/adb/modules/*; do
+                [ -f "${'$'}d/module.prop" ] || continue
+                grep -Eqi '^(id|name)=.*(zygisk.?next|rezygisk)' "${'$'}d/module.prop" || continue
+                if [ -e "${'$'}d/disable" ] || [ -e "${'$'}d/remove" ]; then
+                    echo "inactive: ${'$'}d"
+                else
+                    echo "installed: ${'$'}d (runtime not verified)"
+                fi
+            done
+        """.trimIndent())
+        val provider = (rootAccess.currentStatus() as? RootStatus.Available)?.provider
+        if (provider != RootProvider.MAGISK) {
+            return warn("Zygisk hook", "hook .so present; " +
+                if (external.isNotBlank()) {
+                    "external provider metadata:\n$external\n" +
+                        "Confirm hook initialization in a freshly started target process; installation is not runtime proof."
+                } else {
+                    "no known external Zygisk provider found. Provider detection is heuristic; " +
+                        "check ZygiskNext/provider settings and target-process initialization logs."
+                })
+        }
         val setting = sh("magisk --sqlite \"SELECT value FROM settings WHERE key='zygisk'\" 2>/dev/null")
+        val value = setting.lineSequence().map { it.trim() }.firstOrNull { it == "value=1" || it == "value=0" }
         return when {
-            setting.contains("=1") -> ok("Zygisk hook", "hook .so present + Zygisk enabled ($setting)")
-            setting.isBlank() -> warn(
+            value == "value=1" -> ok("Zygisk hook", "hook .so present + Magisk Zygisk configured enabled. " +
+                "Confirm runtime hook initialization in the target process.")
+            external.isNotBlank() -> warn("Zygisk hook", "hook .so present; external provider metadata:\n$external\n" +
+                "Magisk built-in Zygisk is not confirmed enabled; verify external provider runtime separately.")
+            value == null -> warn(
                 "Zygisk hook",
                 "hook .so present; couldn't read the Zygisk setting (magisk sqlite). " +
-                    "On KernelSU, Zygisk comes from the ZygiskNext module instead.",
+                    "Runtime status unknown — check provider and target-process initialization logs.",
             )
             else -> warn(
                 "Zygisk hook",
