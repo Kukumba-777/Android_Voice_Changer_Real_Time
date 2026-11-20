@@ -55,6 +55,19 @@ multibindings. Adding a new tab is one new `:feature:*` Gradle module + one entr
 
 ## How the runtime fits together
 
+The module's Zygisk JNI hook processes PCM16 and float reads from Java
+`AudioRecord` in the process that owns the recorder. The preset editor's
+**Test** button exercises this path; `avcrtzy: java-read FIRED` confirms that
+samples were processed. A recorder that delegates capture to a separate media
+service does not exercise this hook. Native VoIP and AAudio have separate
+paths and are not verified by this test.
+
+The cellular daemon identifies cards and PCM devices by controls and front-end
+names. Only recognized routing backends are supported. Failed codec setup
+rolls back the daemon's mixer edits and waits for a route change or engine
+toggle. `--unmute` only clears the dedicated AVCRT mute control; it does not
+reconstruct HAL routing after an abnormal daemon exit.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ APP PROCESS                                                                 │
@@ -115,17 +128,16 @@ gradle wrapper --gradle-version 8.10.2
 ./gradlew :app:assembleDebug
 ```
 
-The first build will:
-1. Compile `libavcrtfx.so` for arm64-v8a / armeabi-v7a / x86_64
-2. Assemble the KSU module zip from `ksu-module/src/main/module/*` + the .so files
-3. Drop it into `app/src/main/assets/avcrt-module.zip` (sha256 logged)
-4. Compile and package the APK
+The build packages the native components and two module archives into the APK:
+the default archive with the cellular daemon and Zygisk app capture, and a
+cellular-only recovery archive without a `zygisk/` directory. Both have the same
+module ID so the manager can stage recovery as an update, not a second module.
 
 The APK ends up at `app/build/outputs/apk/debug/app-debug.apk`.
 
 ---
 
-## Installing the audio HAL module
+## Installing the root module
 
 1. Install the APK on a rooted device.
 2. Open AVCRT — the Home tab will show **“Install module”**.
@@ -133,16 +145,28 @@ The APK ends up at `app/build/outputs/apk/debug/app-debug.apk`.
    - extracts `avcrt-module.zip` from its assets,
    - shells out as root (`ksud module install` / `magisk --install-module`),
    - writes a manifest under `/data/local/tmp/avcrt/`.
-4. Reboot the device. The audio HAL picks up our `audio_effects.xml` overlay during boot,
-   loads `libavcrtfx.so`, and registers the AVCRT effect on mic / voice_communication /
-   voice_call / voice_recognition / unprocessed sources.
+4. Reboot the device. Recheck Home: files on disk, pending changes, and a running
+   daemon are separate states. Zygisk capture still needs a compatible active loader.
 5. Pick a preset on the Presets tab, flip the master switch on the Home tab, then test by
    recording a voice memo or making a VoIP call.
 
-If the install fails or the effect doesn't show up after reboot, check the Logs tab —
-the install script's `ui_print` output and the native effect's logcat go through
-different sinks (the in-app log is for the Kotlin side only; for native logs run
-`adb logcat -s avcrtfx`).
+On Kitsune 30.7, a module containing `zygisk/` can be skipped at boot when its
+Zygisk loader is inactive (`avcrt: ignore` in the manager log). Another reboot
+with the unchanged package does not resolve that. If Home offers **Cellular only**,
+that action installs the recovery archive through the detected manager; it does
+not enable Zygisk or provide app/VoIP processing. You can also make the primary
+archive cellular-only at build time with `-PavcrtCellularOnly=true` to avoid an
+extra install/reboot on a device that already exhibits this problem. Keep the
+default build for devices where app/VoIP capture is wanted.
+
+Read the current-boot daemon log and native capture events separately in Logs.
+For Zygisk capture from a fresh process, use `adb logcat -d -s avcrtzy`. A hook
+initialization event or a mapped library is not evidence of processed PCM.
+
+The experimental AudioFlinger backend is not included by default. To isolate
+it for development, use `-PavcrtCellularOnly=true -PavcrtExperimentalAf=true`.
+That backend looks for one compatible, already-loaded symbol owner in the
+audioserver namespace. No match, ambiguity, or a rejected prologue means no hook.
 
 ---
 
