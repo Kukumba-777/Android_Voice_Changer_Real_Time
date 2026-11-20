@@ -61,7 +61,7 @@ constexpr int      kIdlePollMs = 400;  // how often we look for a call while idl
 // Capture/engage mode for the current call.
 //  MODE_BT = a Bluetooth (HFP/SCO) headset call — the uplink sources from INT_BT_SCO_TX
 //  (the BT chip <-> ADSP SCO bridge), handled like MODE_HEADSET (reroute to bolero + capture
-//  the freed mic + incall_music inject), but the BT mic is on the LITO card (not a USB card).
+//  the freed mic + incall_music inject), but the BT mic is on the voice card (not a USB card).
 enum Mode { MODE_NONE = 0, MODE_BUILTIN = 1, MODE_HEADSET = 2, MODE_BT = 3 };
 
 // The incall_music inject path is structurally quieter than the real mic leg, so
@@ -97,7 +97,9 @@ int find_pcm(int card, const char* fe, bool capture) {
         int c, d, n = 0;
         if (sscanf(line, "%d-%d: %n", &c, &d, &n) != 2 || !n || c != card) continue;
         const char* end = strchr(line + n, ':');
-        if (!end || !strstr(end, capture ? " : capture " : " : playback ")) continue;
+        // The first colon can introduce a direction directly when the
+        // driver omits the optional PCM subname field.
+        if (!end || !strstr(end, capture ? ": capture " : ": playback ")) continue;
         if (fe) {
             const size_t len = strlen(fe);
             if (strncmp(line + n, fe, len) || (line[n + len] != ' ' && line[n + len] != ':')) continue;
@@ -109,27 +111,61 @@ int find_pcm(int card, const char* fe, bool capture) {
     return found;
 }
 
-int find_voice_card() {
+int find_voice_card(bool report = false) {
+    constexpr const char* required_controls[] = {
+        "MultiMedia1 Mixer TX_CDC_DMA_TX_3",
+        "MultiMedia1 Mixer TX_CDC_DMA_TX_4",
+        "Incall_Music Audio Mixer MultiMedia9",
+        "VoiceMMode1_Tx Mixer TX_CDC_DMA_TX_3_MMode1",
+    };
     FILE* f = fopen("/proc/asound/cards", "re");
-    if (!f) return -1;
+    if (!f) {
+        if (report) perror("/proc/asound/cards");
+        return -1;
+    }
     char line[256];
     int found = -1;
     while (fgets(line, sizeof(line), f)) {
         int n, consumed = 0;
         if (sscanf(line, " %d [%n", &n, &consumed) != 1 || !consumed || n < 0) continue;
-        if (find_pcm(n, "MultiMedia1", true) < 0 || find_pcm(n, "MultiMedia9", false) < 0) continue;
+        const int capture = find_pcm(n, "MultiMedia1", true);
+        const int playback = find_pcm(n, "MultiMedia9", false);
+        if (report) {
+            printf("%s", line);
+            printf("  PCM: MultiMedia1 capture=%d, MultiMedia9 playback=%d (-1: unavailable or ambiguous)\n",
+                   capture, playback);
+        }
+        if (capture < 0 || playback < 0) continue;
         mixer* m = mixer_open(n);
-        if (!m) continue;
-        const bool compatible = mixer_get_ctl_by_name(m, "MultiMedia1 Mixer TX_CDC_DMA_TX_3") &&
-                                mixer_get_ctl_by_name(m, "MultiMedia1 Mixer TX_CDC_DMA_TX_4") &&
-                                mixer_get_ctl_by_name(m, "Incall_Music Audio Mixer MultiMedia9") &&
-                                mixer_get_ctl_by_name(m, "VoiceMMode1_Tx Mixer TX_CDC_DMA_TX_3_MMode1");
+        if (!m) {
+            if (report) puts("  Cannot open mixer");
+            continue;
+        }
+        bool compatible = true;
+        for (const auto* control : required_controls) {
+            if (mixer_get_ctl_by_name(m, control)) continue;
+            compatible = false;
+            if (report) printf("  Missing control: %s\n", control);
+        }
+        if (report && compatible) {
+            printf("  Matching voice schema; %s=%s, %s=%s\n",
+                   kDecMuteCtl, mixer_get_ctl_by_name(m, kDecMuteCtl) ? "present" : "absent",
+                   kCvpRebuildCtl, mixer_get_ctl_by_name(m, kCvpRebuildCtl) ? "present" : "absent");
+        }
         mixer_close(m);
         if (!compatible) continue;
-        if (found >= 0) { found = -1; break; }
+        if (found >= 0) {
+            if (report) printf("Voice card not selected: multiple matches (%d and %d)\n", found, n);
+            fclose(f);
+            return -1;
+        }
         found = n;
     }
     fclose(f);
+    if (report) {
+        if (found >= 0) printf("Selected voice card %d; live call routing not tested\n", found);
+        else puts("Voice card not selected: no matching PCM and mixer schema");
+    }
     return found;
 }
 
@@ -380,7 +416,7 @@ Mode detect_mode(int& session) {
     if (mx_any_on("VoiceMMode1_Tx Mixer USB_AUDIO_TX_MMode1")) { session = 1; return MODE_HEADSET; }
     // Bluetooth (HFP/SCO) headset call: the uplink sources from INT_BT_SCO_TX. Detected like USB but
     // a BT device is NOT a USB sound card, so this is checked before the USB-card guard below and the
-    // BT flow (engage_bt) frees + captures the BT mic on the lito card.
+    // BT flow (engage_bt) frees + captures the BT mic on the voice card.
     if (mx_any_on("VoiceMMode2_Tx Mixer INT_BT_SCO_TX_MMode2")) { session = 2; return MODE_BT; }
     if (mx_any_on("VoiceMMode1_Tx Mixer INT_BT_SCO_TX_MMode1")) { session = 1; return MODE_BT; }
     // A USB-Audio CARD is present but the uplink isn't on USB yet (AHAL mid-transition / leftover
@@ -436,11 +472,11 @@ struct Session {
     char  spare_dec_mux[20] = {0};
     char  spare_aif[28] = {0};       // TX_AIF<cap>_CAP Mixer DEC<spare> (our capture leg)
     char  spare_aif1[28] = {0};      // TX_AIF<modem>_CAP Mixer DEC<spare> (the MODEM leg — must stay 0)
-    struct pcm* cap = nullptr;     // built-in: spare-DEC capture (pcm <lito>,0)
-    struct pcm* inj = nullptr;     // both: incall_music inject (pcm <lito>,23)
+    struct pcm* cap = nullptr;     // built-in: spare-DEC capture through the discovered capture PCM
+    struct pcm* inj = nullptr;     // incall_music injection through the discovered playback PCM
     // ---- headset mode only ----
     struct pcm* usb_cap   = nullptr;   // the freed USB headset mic (pcm <usb>,0, 48k mono)
-    struct pcm* be_keeper = nullptr;   // keeps the bolero placeholder codec chain powered (pcm <lito>,0)
+    struct pcm* be_keeper = nullptr;   // keeps the placeholder codec chain powered
     char  vtx_usb[44] = {0};           // VoiceMMode<n>_Tx Mixer USB_AUDIO_TX_MMode<n>
     char  vtx_bt[48] = {0};            // VoiceMMode<n>_Tx Mixer INT_BT_SCO_TX_MMode<n> (BT mode)
     char  vtx_bolero[48] = {0};        // VoiceMMode<n>_Tx Mixer TX_CDC_DMA_TX_3_MMode<n>
@@ -754,7 +790,7 @@ bool engage_headset(Session& s, int session) {
 // BT analogue of USB_AUDIO_TX). Same idea as engage_headset: reroute the uplink INT_BT_SCO_TX->bolero
 // (the modem reads the silent bolero placeholder), which should FREE the BT SCO mic; capture the freed
 // BT mic via MM1 <- INTERNAL_BT_SCO_TX, pitch (avcrt::Engine), inject via incall_music. The BT mic is on
-// the LITO card (not a separate USB card), so MM1 is reused SEQUENTIALLY: first as the BE-keeper to fire
+// the voice card (not a separate USB card), so MM1 is reused SEQUENTIALLY: first as the BE-keeper to fire
 // the reroute, then re-pointed to the BT mic.
 //
 // ⚠️ LIVE-VALIDATION PATH — needs a real BT (HFP) GSM call to confirm two unknowns the USB flow did NOT
@@ -1222,7 +1258,7 @@ void restart_audioserver() {
         sleep_ms(200);
     }
     for (int i = 0; i < 25 && g_run.load(); ++i) sleep_ms(200);   // ~5s settle for the call audio
-    resolve_cards();   // the restart may have RENUMBERED the cards — re-resolve lito + reopen g_mixer
+    resolve_cards();   // the restart may have renumbered the cards
 }
 
 // In-kernel CVP/CVS vocproc rebuild for the live call — the AVCRT-unified-kernel replacement for the
@@ -1259,13 +1295,14 @@ int main(int argc, char** argv) {
         if (strcmp(argv[1], "--unmute") == 0) return run_unmute();
         if (strcmp(argv[1], "--probe-kcontrol") == 0) return run_probe_kcontrol();
         if (strcmp(argv[1], "--probe-cvp") == 0) return run_probe_cvp();
+        if (strcmp(argv[1], "--probe-voice-card") == 0) return find_voice_card(true) >= 0 ? 0 : 1;
         if (strcmp(argv[1], "--list-probes") == 0) {
-            puts("--probe-kcontrol\n--probe-cvp");
+            puts("--probe-kcontrol\n--probe-cvp\n--probe-voice-card");
             return 0;
         }
     }
     if (argc != 1) {
-        fprintf(stderr, "Usage: %s [--unmute|--probe-kcontrol|--probe-cvp|--list-probes]\n", argv[0]);
+        fprintf(stderr, "Usage: %s [--unmute|--probe-kcontrol|--probe-cvp|--probe-voice-card|--list-probes]\n", argv[0]);
         return 2;
     }
 

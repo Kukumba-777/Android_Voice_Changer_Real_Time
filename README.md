@@ -167,6 +167,12 @@ Cellular routing on Lahaina/Yupik (`lahainayupikidp`) remains experimental and
 requires handset validation. As with Lito, the daemon checks for a unique card
 with the required mixer controls and PCM endpoints; the card label is not a
 compatibility signal. App-level Zygisk capture does not need the cellular kernel patch.
+After updating the module, use the daemon's read-only probe to see which card,
+PCM endpoints, and mixer controls were found before testing a call:
+
+```sh
+adb shell "su -c '/data/adb/modules/avcrt/bin/avcrtd --probe-voice-card'"
+```
 
 On Kitsune 30.7, a module containing `zygisk/` can be skipped at boot when its
 Zygisk loader is inactive (`avcrt: ignore` in the manager log). Another reboot

@@ -5,7 +5,8 @@
 
 ui_print "  AVCRT — system-wide voice changer"
 [ ! -d "$MODPATH/zygisk" ] || ui_print "  • App capture: requires a compatible Zygisk runtime"
-ui_print "  • Cellular calls: needs the AVCRT-patched kernel"
+ui_print "  • Cellular routing is experimental and requires a compatible audio route"
+ui_print "  • Built-in microphone replacement requires a matching AVCRT kernel patch"
 
 set_perm_recursive "$MODPATH" 0 0 0755 0644
 set_perm "$MODPATH/bin/avcrtd"        0 0 0755
