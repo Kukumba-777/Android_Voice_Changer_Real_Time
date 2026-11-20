@@ -14,6 +14,16 @@ LOG=/data/adb/avcrt_daemon.log
 
 [ -x "$BIN" ] || exit 0
 
+# Derive the installed overlay destination from the module payload. Missing or
+# ambiguous overlays leave AudioFlinger untouched (Zygisk remains independent).
+AVCRT_AF_PAYLOAD=
+for payload in "$MODDIR"/system/lib*/libavcrt_afhook.so; do
+    [ -f "$payload" ] || continue
+    if [ -n "$AVCRT_AF_PAYLOAD" ]; then AVCRT_AF_PAYLOAD=; break; fi
+    AVCRT_AF_PAYLOAD=${payload#"$MODDIR"}
+done
+export AVCRT_AF_PAYLOAD
+
 supervise() {
     # Clear any stale mute from a previous unclean shutdown.
     "$BIN" --unmute >> "$LOG" 2>&1

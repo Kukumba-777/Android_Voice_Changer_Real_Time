@@ -4,7 +4,7 @@
 // chokepoint every mic capture passes through, regardless of which app/process owns it:
 //
 //     android::AudioStreamIn::read(void* buffer, size_t bytes, size_t* read)
-//        in /system/lib64/libaudioflinger_datapath.so
+//        resolved from already-loaded objects that export the supported ABI.
 //
 // AudioFlinger's RecordThread::threadLoop pulls the raw mic from the input HAL through this for
 // EVERY input stream, at the device's native format, BEFORE distributing to per-track consumers.
@@ -26,6 +26,7 @@
 // hook MUST be disabled (else apps get double-pitched). This hook supersedes Zygisk.
 
 #include <dlfcn.h>
+#include <link.h>
 #include <pthread.h>
 #include <sys/system_properties.h>
 #include <unistd.h>
@@ -36,6 +37,7 @@
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include <android/log.h>
@@ -293,37 +295,74 @@ int hooked_read(void *self, void *buffer, size_t bytes, size_t *read) {
     size_t frames = got / frame_size;
     if (frames == 0) return st;
 
-    static int dbg = 0;
-    if (dbg < 5) { LOGI("read FIRED self=%p bytes=%zu frames=%zu ch=%u bps=%d en=%d rev=%d",
-                        self, got, frames, channels, c->bps, cfg.enabled, cfg.revision); dbg++; }
-
     apply_cfg(c, cfg);
     process_pcm(c, buffer, frames, channels, c->bps);
+    static std::atomic<unsigned> logged{0};
+    if (logged.load() < 5 && logged.fetch_add(1) < 5)
+        LOGI("AF PCM processed frames=%zu ch=%u bps=%d rev=%d", frames, channels, c->bps, cfg.revision);
     return st;
 }
 
 // ---- hook installer ----
-std::atomic<bool> g_hooked{false};
+struct Candidate {
+    void *handle;
+    void *read;
+    void *props;
+};
 
-void try_install() {
-    if (g_hooked.load()) return;
-    void *h = dlopen("libaudioflinger_datapath.so", RTLD_NOW | RTLD_NOLOAD);
-    if (!h) return;
-    void *addr = dlsym(h, "_ZN7android13AudioStreamIn4readEPvmPm");
-    g_getAudioProperties = (getprops_fn)dlsym(h, "_ZNK7android13AudioStreamIn18getAudioPropertiesEv");
-    if (!addr) { LOGW("AudioStreamIn::read symbol not found"); return; }
-    g_hooked.store(true);
+bool try_install() {
+    std::vector<std::string> paths;
+    dl_iterate_phdr([](dl_phdr_info *info, size_t, void *out) -> int {
+        if (info->dlpi_name && info->dlpi_name[0] == '/')
+            static_cast<std::vector<std::string> *>(out)->emplace_back(info->dlpi_name);
+        return 0;
+    }, &paths);
+
+    Candidate candidate{};
+    for (const auto &path : paths) {
+        void *h = dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD | RTLD_LOCAL);
+        if (!h) continue;
+        void *read = dlsym(h, "_ZN7android13AudioStreamIn4readEPvmPm");
+        void *props = dlsym(h, "_ZNK7android13AudioStreamIn18getAudioPropertiesEv");
+        Dl_info rd{}, gp{};
+        // dlsym may return a dependency's symbol. Require both entry points to
+        // belong to this exact loaded object, not a pair assembled across libraries.
+        if (!read || !props || !dladdr(read, &rd) || !dladdr(props, &gp) ||
+            rd.dli_fbase != gp.dli_fbase || !rd.dli_fname || path != rd.dli_fname) {
+            dlclose(h);
+            continue;
+        }
+        if (candidate.handle && candidate.read != read) {
+            dlclose(h);
+            dlclose(candidate.handle);
+            LOGW("AudioStreamIn hook skipped: multiple loaded ABI candidates");
+            return true;
+        }
+        if (candidate.handle) dlclose(h);
+        else candidate = {h, read, props};
+    }
+    if (!candidate.handle) return false;
+
+    void *addr = candidate.read;
+    g_getAudioProperties = reinterpret_cast<getprops_fn>(candidate.props);
     refresh_config();
     int reason = 0;
     void *tr = avcrt::avcrt_inline_hook(addr, (void *)hooked_read, &reason);
     if (tr) { orig_read = (read_fn)tr;
               LOGI("inline-hooked AudioStreamIn::read @%p (getProps=%p)", addr, (void *)g_getAudioProperties); }
-    else    LOGW("AudioStreamIn::read hook SKIPPED @%p reason=%d (1=prologue 2=write 3=mem)", addr, reason);
+    else {
+        dlclose(candidate.handle);
+        LOGW("AudioStreamIn::read hook SKIPPED @%p reason=%d (1=prologue 2=write 3=mem)", addr, reason);
+    }
+    return true;
 }
 
 void *install_thread(void *) {
-    // libaudioflinger_datapath is always loaded in audioserver; retry briefly just in case.
-    for (int i = 0; i < 50 && !g_hooked.load(); i++) { try_install(); usleep(100000); }
+    for (int i = 0; i < 10; i++) {
+        if (try_install()) return nullptr;
+        usleep(500000);
+    }
+    LOGW("AudioStreamIn hook skipped: no unique compatible ABI visible in the linker namespace");
     return nullptr;
 }
 

@@ -1027,22 +1027,14 @@ int run_probe_cvp() {
 // AudioFlinger's RecordThread — apps, mediaserver, the camera — at the HAL read.
 // It can't load itself: it must be ptrace-injected into the audioserver process (a
 // non-zygote init service). We drive that here, in the already-root, auto-supervised
-// daemon, and set avcrt.afhook.active=1 so the Zygisk hook gates itself off the paths
-// afhook now covers (no double-pitch).
+// daemon. Packaging keeps this experimental path separate from Zygisk. A mapped
+// payload does not establish that an inline hook was installed or processes audio.
 //
 // SAFETY (this runs on a daily driver): if our injected hook were to crash audioserver,
 // it would respawn and we'd re-inject → an audio bootloop. So we DISABLE afhook
-// (and clear the flag → Zygisk resumes covering apps) after a few quick post-inject
+// after a few quick post-inject
 // restarts, leaving audioserver clean. The inject itself is isolated in a short-lived
 // child process (the avcrt_inject binary), so a ptrace glitch can't take down avcrtd.
-constexpr const char* kAfhookSo = "/system/lib64/libavcrt_afhook.so";
-
-void setprop_str(const char* key, const char* val) {
-    char cmd[160];
-    snprintf(cmd, sizeof(cmd), "setprop %s %s", key, val);
-    int rc = system(cmd);
-    (void)rc;
-}
 
 pid_t pidof_one(const char* name) {
     char cmd[96];
@@ -1071,7 +1063,7 @@ bool afhook_in_maps(pid_t pid) {
 
 // Run the avcrt_inject helper (sibling of this binary) in a child process. Returns 0
 // only if it exits 0. Isolated so a ptrace failure never affects the daemon.
-int run_injector(pid_t target) {
+int run_injector(pid_t target, const char* payload) {
     char exe[512];
     ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
     if (n <= 0) return -1;
@@ -1081,16 +1073,13 @@ int run_injector(pid_t target) {
     *slash = '\0';
     char inj[600];
     snprintf(inj, sizeof(inj), "%s/avcrt_inject", exe);
-    // Self-heal the executable bit: the module's set_perm_recursive lands files at 0644 and a forgotten
-    // set_perm on avcrt_inject leaves it non-executable → execl below EACCES'd → "inject did not take".
-    // We're root, so just ensure +x (harmless if already correct).
-    chmod(inj, 0755);
+    if (access(inj, X_OK) != 0) return -1;
     char pidstr[16];
     snprintf(pidstr, sizeof(pidstr), "%d", target);
     pid_t child = fork();
     if (child < 0) return -1;
     if (child == 0) {
-        execl(inj, inj, pidstr, kAfhookSo, (char*)nullptr);
+        execl(inj, inj, pidstr, payload, (char*)nullptr);
         _exit(127);   // exec failed
     }
     int st = 0;
@@ -1099,12 +1088,21 @@ int run_injector(pid_t target) {
 }
 
 void* afhook_monitor(void*) {
+    const char* payload = getenv("AVCRT_AF_PAYLOAD");
+    if (!payload || payload[0] != '/') {
+        fprintf(stderr, "[avcrtd] AudioFlinger: no unique module overlay payload; skipping\n");
+        return nullptr;
+    }
     pid_t  last_injected = 0;
     time_t last_inject_t = 0;
     int    strikes       = 0;       // quick post-inject restarts (suspected hook crash)
     bool   disabled      = false;
+    pid_t  attempt_pid   = 0;
+    pid_t  observed_pid  = 0;
+    int    attempts      = 0;
     const int kCrashWindowSec = 12; // a restart within this of our inject = suspect us
     const int kMaxStrikes     = 3;
+    const int kMaxAttemptsPerPid = 3;
 
     while (g_run.load()) {
         if (disabled) { for (int i = 0; i < 10 && g_run.load(); ++i) sleep_ms(500); continue; }
@@ -1116,8 +1114,8 @@ void* afhook_monitor(void*) {
         // over)? Adopt it — re-injecting a second copy would inline-hook the already-patched
         // prologue and corrupt it. This is the steady state.
         if (afhook_in_maps(as)) {
+            observed_pid = as;
             if (as != last_injected) {
-                setprop_str("avcrt.afhook.active", "1");   // make sure the gate flag is set
                 last_injected = as;
                 if (last_inject_t == 0) last_inject_t = time(nullptr);
             }
@@ -1127,35 +1125,48 @@ void* afhook_monitor(void*) {
 
         // audioserver is NEW and NOT injected (boot, or a restart that dropped our hook).
         time_t now = time(nullptr);
-        if (as != last_injected && last_inject_t != 0 && now - last_inject_t < kCrashWindowSec) {
+        const bool new_pid = as != observed_pid;
+        if (new_pid) observed_pid = as;
+        if (new_pid && as != last_injected && last_inject_t != 0 && now - last_inject_t < kCrashWindowSec) {
             // it respawned right after we injected → our hook likely crashed it.
             if (++strikes >= kMaxStrikes) {
-                setprop_str("avcrt.afhook.active", "0");   // Zygisk resumes covering apps
                 fprintf(stderr, "[avcrtd] afhook: audioserver restarted %d× shortly after inject — "
                                 "DISABLING afhook (audio left clean)\n", strikes);
                 disabled = true;
                 continue;
             }
-        } else if (as != last_injected) {
+        } else if (new_pid && as != last_injected) {
             strikes = 0;   // healthy/independent restart
         }
 
-        sleep_ms(1500);   // let audioserver finish init (load libaudioflinger_datapath)
+        sleep_ms(1500);   // let audioserver finish initializing
         if (!g_run.load()) break;
         as = pidof_one("audioserver");
         if (as == 0) continue;
+        if (as != attempt_pid) { attempt_pid = as; attempts = 0; }
+        if (attempts >= kMaxAttemptsPerPid) { sleep_ms(2000); continue; }
+        const std::string target_path = "/proc/" + std::to_string(as) + "/root" + payload;
+        struct stat st{};
+        if (stat(target_path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
+            attempts = kMaxAttemptsPerPid;
+            fprintf(stderr, "[avcrtd] AudioFlinger: overlay not visible to pid=%d; skipping without attaching\n", as);
+            continue;
+        }
+        ++attempts;
 
-        if (run_injector(as) == 0) {
+        if (run_injector(as, payload) == 0) {
             sleep_ms(300);
             if (afhook_in_maps(as)) {
-                setprop_str("avcrt.afhook.active", "1");
+                observed_pid = as;
                 last_injected = as;
                 last_inject_t = time(nullptr);
-                fprintf(stderr, "[avcrtd] afhook injected into audioserver %d (active)\n", as);
+                fprintf(stderr, "[avcrtd] AudioFlinger payload mapped in pid=%d; see avcrtaf for hook status\n", as);
                 continue;
             }
         }
-        fprintf(stderr, "[avcrtd] afhook inject did not take for audioserver %d — retrying\n", as);
+        fprintf(stderr, "[avcrtd] afhook load failed for pid=%d attempt=%d/%d%s\n",
+                as, attempts, kMaxAttemptsPerPid,
+                attempts == kMaxAttemptsPerPid ? " — waiting for new audioserver PID" : "");
         sleep_ms(2000);
     }
     return nullptr;
@@ -1309,13 +1320,13 @@ int main(int argc, char** argv) {
     pthread_t mon;
     bool mon_ok = pthread_create(&mon, nullptr, call_monitor, nullptr) == 0;
 
-    // afhook auto-injector (universal AudioFlinger-level hook for apps + mediaserver +
-    // camera). Runs ALWAYS, independent of the cellular path — it injects into audioserver
-    // and self-disables on a crash loop. Keeps the daemon's mic-capture (pcm 0,0) separate.
+    // Optional AudioFlinger monitor, separate from cellular capture.
     pthread_t afmon;
-    bool afmon_ok = pthread_create(&afmon, nullptr, afhook_monitor, nullptr) == 0;
+    const char* af_payload = getenv("AVCRT_AF_PAYLOAD");
+    bool afmon_ok = af_payload && af_payload[0] == '/' &&
+                    pthread_create(&afmon, nullptr, afhook_monitor, nullptr) == 0;
 
-    fprintf(stderr, "[avcrtd] service started (idle poll %d ms, patch=%s, afhook=%s)\n",
+    fprintf(stderr, "[avcrtd] service started (idle poll %d ms, patch=%s, af monitor=%s)\n",
             kIdlePollMs, g_patch_present ? "yes" : "no", afmon_ok ? "on" : "off");
 
     DspConfig dc;
