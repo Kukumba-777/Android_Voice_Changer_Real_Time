@@ -20,14 +20,10 @@ object AvcrtPaths {
     /** Module manifest written during install — used for version diff checks. */
     const val MODULE_MANIFEST_FILE = "$MODULE_DATA_DIR/module.manifest"
 
-    /**
-     * Marker written by the installer right after `ksud module install` / `magisk
-     * --install-module`. The KSU module's `post-fs-data.sh` deletes it on every
-     * boot — so its presence at runtime proves the install happened but the
-     * device hasn't rebooted yet. Lives under `/data/adb/` (not the data dir
-     * above) so the boot-time cleanup doesn't need to mkdir anything first.
-     */
+    /** Boot ID at install time. A legacy empty marker is not proof of a pending reboot. */
     const val INSTALL_PENDING_MARKER = "/data/adb/avcrt_install_pending"
+    const val EARLY_BOOT_FILE = "/data/adb/avcrt_early_boot"
+    const val SERVICE_BOOT_FILE = "/data/adb/avcrt_service_boot"
 
     /**
      * Log file the daemon's supervisor (`service.sh`) appends to (avcrtd writes
@@ -35,9 +31,13 @@ object AvcrtPaths {
      * tab. MUST match the `LOG=` path in ksu-module/src/main/module/service.sh.
      */
     const val DAEMON_LOG_FILE = "/data/adb/avcrt_daemon.log"
+    const val CURRENT_DAEMON_LOG_GUARD =
+        "[ -s '$SERVICE_BOOT_FILE' ] && [ \"\$(cat '$SERVICE_BOOT_FILE')\" = \"\$(cat /proc/sys/kernel/random/boot_id)\" ]"
 
     /** Module ID — also the directory name under /data/adb/modules. */
-    const val MODULE_ID = "avcrt"
+    const val MODULE_ID = BuildConfig.MODULE_ID
+    const val MODULE_DIR = "/data/adb/modules/$MODULE_ID"
+    const val STAGED_MODULE_DIR = "/data/adb/modules_update/$MODULE_ID"
 
     /** System property the native side watches to reload its config. */
     const val RELOAD_PROPERTY = "avcrt.config.revision"

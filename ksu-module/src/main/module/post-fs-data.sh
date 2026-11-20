@@ -6,6 +6,11 @@ MODDIR=${0%/*}
 DATA=/data/local/tmp/avcrt
 PRESET="$DATA/active_preset.json"
 
+# Distinguish a skipped module from one that reached early boot only.
+if BOOT=$(cat /proc/sys/kernel/random/boot_id) && [ -n "$BOOT" ]; then
+    (umask 077; printf '%s\n' "$BOOT" > /data/adb/avcrt_early_boot)
+fi
+
 mkdir -p "$DATA"; chmod 0755 "$DATA"
 [ -f "$DATA/engine_state" ] || { echo off > "$DATA/engine_state"; chmod 0644 "$DATA/engine_state"; }
 rm -f /data/adb/avcrt_install_pending 2>/dev/null

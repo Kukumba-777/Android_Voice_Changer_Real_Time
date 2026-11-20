@@ -82,10 +82,11 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    fun onInstallModule() {
+    fun onInstallModule(withoutZygisk: Boolean = false) {
+        if (installing.value) return
         viewModelScope.launch {
             installing.value = true
-            when (val res = engine.installModule()) {
+            when (val res = engine.installModule(withoutZygisk)) {
                 is AvcrtResult.Success -> engine.refreshState()
                 is AvcrtResult.Failure -> transient.value = res.error.message
             }

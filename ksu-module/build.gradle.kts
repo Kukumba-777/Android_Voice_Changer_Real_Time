@@ -1,4 +1,5 @@
 import java.security.MessageDigest
+import java.util.zip.ZipFile
 
 /**
  * Build the bundled KSU module:
@@ -75,7 +76,8 @@ val moduleDescription    = libs.versions.moduleDescription.get()
 
 val moduleTemplateDir = layout.projectDirectory.dir("src/main/module")
 val assemblyDir       = layout.buildDirectory.dir("ksu-module-assembly")
-val zipOutputFile     = layout.buildDirectory.file("outputs/avcrt-module.zip")
+val cellularOnly = providers.gradleProperty("avcrtCellularOnly").map { it.toBooleanStrict() }.orElse(false)
+val experimentalAf = providers.gradleProperty("avcrtExperimentalAf").map { it.toBooleanStrict() }.orElse(false)
 
 /**
  * Writes module.prop with values from the version catalog. The id MUST match
@@ -93,14 +95,19 @@ val writeModuleProp by tasks.registering {
         appendLine("author=$moduleAuthor")
         appendLine("description=$moduleDescription")
     }
+    inputs.property("metadata", text)
     doLast {
         out.get().asFile.apply { parentFile.mkdirs() }.writeText(text)
     }
 }
 
-val stageModuleTemplate by tasks.registering(Copy::class) {
+val templateOutput = assemblyDir.map { it.dir("template") }
+val binariesOutput = assemblyDir.map { it.dir("binaries") }
+val metadataOutput = assemblyDir.map { it.file("module.prop") }
+
+val stageModuleTemplate by tasks.registering(Sync::class) {
     from(moduleTemplateDir)
-    into(assemblyDir)
+    into(templateOutput)
 }
 
 /**
@@ -114,7 +121,7 @@ val stageModuleTemplate by tasks.registering(Copy::class) {
  * obj/<abi>/` (unstripped) and `stripped_native_libs/.../<abi>/` (stripped). We
  * glob both and pick the executable + the .so.
  */
-val stageModuleBinaries by tasks.registering(Copy::class) {
+val stageModuleBinaries by tasks.registering(Sync::class) {
     dependsOn("externalNativeBuildRelease")
     val intermediates = layout.buildDirectory.dir("intermediates")
 
@@ -167,26 +174,45 @@ val stageModuleBinaries by tasks.registering(Copy::class) {
         includeEmptyDirs = false
         duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     }
-    into(assemblyDir)
+    into(binariesOutput)
 }
 
 /**
  * Top-level task — assembles the module zip and drops it into the app's
  * assets so it ships inside the APK.
  */
-val bundleModuleZip by tasks.registering(Zip::class) {
+fun Zip.configureModuleZip(fileName: String, withoutZygisk: Boolean, withAf: Boolean = false) {
     dependsOn(writeModuleProp, stageModuleTemplate, stageModuleBinaries)
-    archiveFileName.set("avcrt-module.zip")
+    archiveFileName.set(fileName)
     destinationDirectory.set(layout.buildDirectory.dir("outputs"))
-    from(assemblyDir)
+    inputs.property("withoutZygisk", withoutZygisk)
+    inputs.property("withAf", withAf)
+    from(templateOutput, binariesOutput, metadataOutput)
+    includeEmptyDirs = false
+    // Managers may skip the whole module when no Zygisk provider is enabled.
+    if (withoutZygisk) exclude("zygisk", "zygisk/**")
+    if (!withAf) exclude("system/**/libavcrt_afhook.so", "bin/avcrt_inject", "sepolicy.rule")
 
     // Resolve rootProject refs at configuration time — only plain File objects
     // (which are serializable) are captured in the doLast action below.
-    val assetsDst = rootProject.file("app/src/main/assets/avcrt-module.zip")
+    val assetsDst = rootProject.file("app/src/main/assets/$fileName")
     val rootDir = rootProject.projectDir
+    outputs.file(assetsDst)
 
     doLast {
         val src = archiveFile.get().asFile
+        ZipFile(src).use { zip ->
+            for (required in listOf("module.prop", "customize.sh", "post-fs-data.sh", "service.sh", "bin/avcrtd")) {
+                check(zip.getEntry(required)?.isDirectory == false) { "$fileName is missing $required" }
+            }
+            val hasZygisk = zip.entries().asSequence().any { it.name == "zygisk" || it.name.startsWith("zygisk/") }
+            check(hasZygisk != withoutZygisk) { "Unexpected Zygisk contents in $fileName" }
+            if (!withoutZygisk) {
+                check(zip.entries().asSequence().any { !it.isDirectory && it.name.startsWith("zygisk/") && it.name.endsWith(".so") }) {
+                    "$fileName is missing the Zygisk library"
+                }
+            }
+        }
         assetsDst.parentFile.mkdirs()
         src.copyTo(assetsDst, overwrite = true)
         val sha = MessageDigest.getInstance("SHA-256").digest(src.readBytes())
@@ -195,4 +221,16 @@ val bundleModuleZip by tasks.registering(Zip::class) {
             "Bundled KSU module -> ${assetsDst.relativeTo(rootDir)} (sha256: ${sha.take(16)}…)",
         )
     }
+}
+
+val bundleCellularModuleZip by tasks.registering(Zip::class) {
+    configureModuleZip("avcrt-module-cellular.zip", withoutZygisk = true)
+}
+
+val bundleModuleZip by tasks.registering(Zip::class) {
+    dependsOn(bundleCellularModuleZip)
+    val noZygisk = cellularOnly.get()
+    val af = experimentalAf.get()
+    require(!af || noZygisk) { "Experimental AudioFlinger and Zygisk must be tested in separate packages" }
+    configureModuleZip("avcrt-module.zip", withoutZygisk = noZygisk, withAf = af)
 }

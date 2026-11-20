@@ -11,8 +11,16 @@
 MODDIR=${0%/*}
 BIN="$MODDIR/bin/avcrtd"
 LOG=/data/adb/avcrt_daemon.log
+BOOT_FILE=/data/adb/avcrt_service_boot
 
 [ -x "$BIN" ] || exit 0
+BOOT=$(cat /proc/sys/kernel/random/boot_id) || exit 1
+[ -n "$BOOT" ] || exit 1
+if [ "$(cat "$BOOT_FILE" 2>/dev/null)" != "$BOOT" ]; then
+    umask 077
+    : > "$LOG" || exit 1
+    printf '%s\n' "$BOOT" > "$BOOT_FILE" || exit 1
+fi
 
 # Derive the installed overlay destination from the module payload. Missing or
 # ambiguous overlays leave AudioFlinger untouched (Zygisk remains independent).

@@ -6,6 +6,10 @@ plugins {
 
 android {
     namespace = "dev.avcrt.core.common"
+    buildFeatures { buildConfig = true }
+    defaultConfig {
+        buildConfigField("String", "MODULE_ID", "\"${libs.versions.moduleId.get()}\"")
+    }
 }
 
 dependencies {

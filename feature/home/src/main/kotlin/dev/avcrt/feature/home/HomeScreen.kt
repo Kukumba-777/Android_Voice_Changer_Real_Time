@@ -225,9 +225,19 @@ private fun ActivePresetCard(state: HomeUiState) {
 @Composable
 private fun ModuleStatusCard(state: HomeUiState, vm: HomeViewModel) {
     val isReboot = state.engine is EngineState.RebootRequired
-    val (label, showInstall) = when (state.engine) {
+    val offerRecovery = state.engine is EngineState.ModuleNotStartedWithZygisk
+    val (label, showInstall) = when (val engine = state.engine) {
         EngineState.ModuleNotInstalled -> stringResource(R.string.home_module_install) to true
         EngineState.RebootRequired -> stringResource(R.string.home_module_needs_reboot) to false
+        EngineState.ModuleNotStartedWithZygisk -> {
+            val hint = when ((state.rootStatus as? RootStatus.Available)?.provider) {
+                RootProvider.MAGISK -> R.string.home_zygisk_hint_magisk
+                RootProvider.KERNELSU -> R.string.home_zygisk_hint_kernelsu
+                else -> R.string.home_zygisk_hint_generic
+            }
+            stringResource(R.string.home_module_not_started_zygisk, stringResource(hint)) to true
+        }
+        is EngineState.Error -> engine.reason to false
         else -> stringResource(R.string.home_module_installed) to false
     }
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -256,8 +266,8 @@ private fun ModuleStatusCard(state: HomeUiState, vm: HomeViewModel) {
                     )
                     showInstall -> CompactAction(
                         icon = Icons.Rounded.InstallMobile,
-                        text = stringResource(R.string.home_module_install),
-                        onClick = vm::onInstallModule,
+                        text = stringResource(if (offerRecovery) R.string.home_module_install_cellular else R.string.home_module_install),
+                        onClick = { vm.onInstallModule(withoutZygisk = offerRecovery) },
                     )
                     isReboot -> CompactAction(
                         icon = Icons.Rounded.RestartAlt,

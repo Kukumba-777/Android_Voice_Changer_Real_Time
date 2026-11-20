@@ -18,6 +18,11 @@
     <string name="home_module_install">Install module</string>
     <string name="home_module_installed">Module installed</string>
     <string name="home_module_needs_reboot">Reboot required</string>
+    <string name="home_module_not_started_zygisk">AVCRT is installed, but its service was not observed after reboot. %1$s Also check that AVCRT is enabled in the module list.</string>
+    <string name="home_zygisk_hint_magisk">An inactive Zygisk loader can cause some Magisk builds to skip the entire module. Check the loader settings and reboot after changing them.</string>
+    <string name="home_zygisk_hint_kernelsu">For app and VoIP capture, check that a compatible Zygisk loader (such as Zygisk Next) is enabled and working. That alone does not explain a missing AVCRT service; check the KernelSU boot log too.</string>
+    <string name="home_zygisk_hint_generic">Check whether a compatible Zygisk loader is active; its status could not be verified.</string>
+    <string name="home_module_install_cellular">Cellular only</string>
     <string name="home_reboot_action">Reboot device</string>
     <string name="home_engine_idle">Idle</string>
     <string name="home_engine_running">Running</string>

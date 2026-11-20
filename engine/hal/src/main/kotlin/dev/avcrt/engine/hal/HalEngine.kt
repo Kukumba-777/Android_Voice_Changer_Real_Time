@@ -35,7 +35,7 @@ import javax.inject.Singleton
 /**
  * The high-level engine controller.
  *
- * The actual DSP runs inside the KSU module's `libavcrtfx.so` audio effect.
+ * Native DSP runs in the cellular daemon or the app-capture hook.
  * Our job here is to:
  *   - tell the module which preset is active by writing JSON config
  *   - flip the engine on/off via a sentinel file
@@ -46,6 +46,7 @@ import javax.inject.Singleton
 class HalEngine @Inject constructor(
     private val rootAccess: RootAccess,
     private val moduleInstaller: ModuleInstaller,
+    private val moduleRuntime: ModuleRuntime,
     private val presets: PresetRepository,
     private val settings: SettingsRepository,
     private val dispatchers: DispatcherProvider,
@@ -88,7 +89,8 @@ class HalEngine @Inject constructor(
             runCatching {
                 if (settings.snapshot().engineEnabled) {
                     Timber.i("startup sync: re-applying persisted engine-on config")
-                    mutate(enable = true)
+                    val result = mutate(enable = true)
+                    if (result is AvcrtResult.Failure) Timber.w("Startup config sync failed: %s", result.error.message)
                 }
             }.onFailure { Timber.w(it, "startup config sync failed") }
         }
@@ -97,20 +99,14 @@ class HalEngine @Inject constructor(
     override fun observeState(): StateFlow<EngineState> = state.asStateFlow()
 
     override suspend fun refreshState(): AvcrtResult<EngineState> = withContext(dispatchers.io) {
-        // requiresReboot is now driven by the install-pending marker file that
-        // the module's post-fs-data.sh deletes on every boot — so it's already
-        // authoritative. No “module dir exists, therefore we rebooted” heuristic
-        // needed (KSU installs the dir BEFORE reboot, so the heuristic was wrong).
-        val installed = moduleInstaller.isInstalled()
-        val rebootNeeded = moduleInstaller.requiresReboot()
+        val module = moduleRuntime.inspect()
         val s = settings.snapshot()
         val all = presets.observeAll().first()
         val newState = computeState(
             engineEnabled = s.engineEnabled,
             activePresetId = s.activePresetId,
             allPresets = all,
-            moduleInstalled = installed,
-            requiresReboot = rebootNeeded,
+            module = module,
         )
         state.value = newState
         AvcrtResult.Success(newState)
@@ -152,8 +148,11 @@ class HalEngine @Inject constructor(
         }
     }
 
-    override suspend fun installModule(): AvcrtResult<Unit> = withRoot {
-        moduleInstaller.installFromAssets().also { result ->
+    override suspend fun installModule(withoutZygisk: Boolean): AvcrtResult<Unit> = withRoot {
+        if (withoutZygisk && moduleRuntime.inspect() != ModuleRuntime.State.NOT_STARTED_WITH_ZYGISK) {
+            return@withRoot AvcrtResult.Failure(AvcrtError.Io("Refresh module status before choosing recovery"))
+        }
+        moduleInstaller.installFromAssets(withoutZygisk).also { result ->
             if (result is AvcrtResult.Success) {
                 state.value = EngineState.RebootRequired
             }
@@ -200,8 +199,9 @@ class HalEngine @Inject constructor(
         val d = preset.dsp
         val fx = d.fx
         fun b(x: Boolean) = if (x) 1 else 0
-        rootAccess.exec(
+        val mirrored = rootAccess.exec(
             buildString {
+                append("(failed=0; setprop() { command setprop \"\$@\" || failed=1; }; ")
                 append("setprop ${AvcrtPaths.PROP_ENABLED} ${if (enabled) 1 else 0}; ")
                 append("setprop ${AvcrtPaths.PROP_PITCH} ${d.pitchSemitones}; ")
                 append("setprop ${AvcrtPaths.PROP_FORMANT} ${d.formantSemitones}; ")
@@ -299,9 +299,13 @@ class HalEngine @Inject constructor(
                         "${fx.harmonizer.mix}\"; ",
                 )
                 // revision LAST so the native side sees a complete config when it reloads.
-                append("setprop ${AvcrtPaths.RELOAD_PROPERTY} ${dto.revision}")
+                append("setprop ${AvcrtPaths.RELOAD_PROPERTY} ${dto.revision}; exit \"\$failed\")")
             },
         )
+        if (mirrored is AvcrtResult.Failure) {
+            // The cellular JSON has already been updated; report the app-path failure explicitly.
+            Timber.w("App-capture DSP properties were not fully written: %s", mirrored.error.message)
+        }
         return AvcrtResult.Success(Unit)
     }
 
@@ -310,29 +314,32 @@ class HalEngine @Inject constructor(
         activePresetId: String?,
         allPresets: List<Preset>,
     ) {
-        val installed = moduleInstaller.isInstalled()
-        val rebootNeeded = moduleInstaller.requiresReboot()
-        state.value = computeState(enabled, activePresetId, allPresets, installed, rebootNeeded)
+        state.value = computeState(enabled, activePresetId, allPresets, moduleRuntime.inspect())
     }
 
     private fun computeState(
         engineEnabled: Boolean,
         activePresetId: String?,
         allPresets: List<Preset>,
-        moduleInstalled: Boolean,
-        requiresReboot: Boolean,
+        module: ModuleRuntime.State,
     ): EngineState {
         val active = activePresetId?.let { id -> allPresets.firstOrNull { it.id == id } }
         return when {
-            !moduleInstalled -> EngineState.ModuleNotInstalled
-            requiresReboot -> EngineState.RebootRequired
+            module == ModuleRuntime.State.MISSING -> EngineState.ModuleNotInstalled
+            module == ModuleRuntime.State.REBOOT -> EngineState.RebootRequired
+            module == ModuleRuntime.State.DISABLED -> EngineState.Error("Module disabled in root manager")
+            module == ModuleRuntime.State.NOT_STARTED_WITH_ZYGISK -> EngineState.ModuleNotStartedWithZygisk
+            module == ModuleRuntime.State.NOT_STARTED -> EngineState.Error("Module not started this boot. Check the root manager boot log.")
+            module == ModuleRuntime.State.EARLY_BOOT_ONLY -> EngineState.Error("Module reached early boot, but its late-start service was not observed. Check the root manager boot log.")
+            module == ModuleRuntime.State.SERVICE_SEEN -> EngineState.Error("Module service ran this boot, but the daemon is not running. Check the daemon log.")
+            module == ModuleRuntime.State.UNKNOWN -> EngineState.Error("Module status could not be verified")
             engineEnabled && active != null -> EngineState.Running(active)
             else -> EngineState.ReadyDisabled(active)
         }
     }
 
     private suspend inline fun withRoot(block: () -> AvcrtResult<Unit>): AvcrtResult<Unit> {
-        if (rootAccess.currentStatus() !is RootStatus.Available) {
+        if ((rootAccess.currentStatus() as? RootStatus.Available)?.granted != true) {
             val request = rootAccess.requestAccess()
             if (request is AvcrtResult.Failure) return request
         }

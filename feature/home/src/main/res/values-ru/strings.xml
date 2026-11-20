@@ -18,6 +18,11 @@
     <string name="home_module_install">Установить модуль</string>
     <string name="home_module_installed">Модуль установлен</string>
     <string name="home_module_needs_reboot">Нужна перезагрузка</string>
+    <string name="home_module_not_started_zygisk">AVCRT установлен, но запуск его службы после перезагрузки не обнаружен. %1$s Также проверьте, что AVCRT включён в списке модулей.</string>
+    <string name="home_zygisk_hint_magisk">Некоторые сборки Magisk пропускают весь модуль, если загрузчик Zygisk неактивен. Проверьте его настройки и перезагрузитесь после изменений.</string>
+    <string name="home_zygisk_hint_kernelsu">Для приложений и VoIP нужен рабочий загрузчик Zygisk, например Zygisk Next. Это отдельная проверка: причину отсутствия службы AVCRT ищите в журнале загрузки KernelSU.</string>
+    <string name="home_zygisk_hint_generic">Проверьте, активен ли совместимый загрузчик Zygisk: его состояние не удалось подтвердить.</string>
+    <string name="home_module_install_cellular">Только сотовые</string>
     <string name="home_reboot_action">Перезагрузить устройство</string>
     <string name="home_engine_idle">Простой</string>
     <string name="home_engine_running">Работает</string>

@@ -35,7 +35,7 @@ interface VoiceEnginePort {
      */
     fun stopPreview()
 
-    suspend fun installModule(): AvcrtResult<Unit>
+    suspend fun installModule(withoutZygisk: Boolean = false): AvcrtResult<Unit>
 
     suspend fun uninstallModule(): AvcrtResult<Unit>
 

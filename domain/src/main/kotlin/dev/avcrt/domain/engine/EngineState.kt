@@ -17,6 +17,9 @@ sealed interface EngineState {
     /** Module is installed but a reboot is needed for the audio HAL to pick it up. */
     data object RebootRequired : EngineState
 
+    /** The boot completed without a service start, and the installed package contains Zygisk. */
+    data object ModuleNotStartedWithZygisk : EngineState
+
     /** Module installed, configured, and ready — but the master switch is off. */
     data class ReadyDisabled(val activePreset: Preset?) : EngineState
 
