@@ -135,6 +135,19 @@ module ID so the manager can stage recovery as an update, not a second module.
 
 The APK ends up at `app/build/outputs/apk/debug/app-debug.apk`.
 
+For a clean SDK setup, use `./build_avcrtd.sh` (or `./build_avcrtd.sh --compile-sdk 35`).
+Set `ANDROID_HOME` or `ANDROID_SDK_ROOT` to an SDK with command-line tools and
+accept the SDK licenses first. The script installs the selected SDK platform and the
+catalog-pinned Build Tools, NDK, and CMake, builds the debug APK, and prints SHA-256 checksums
+for the APK and both module ZIPs.
+
+The **Build AVCRT APK** workflow runs on pull requests and can be started manually
+from the Actions tab. It keeps the APK, both ZIPs, and a checksum file for 14 days.
+A manual run on the default branch can also send the APK to Telegram (off by
+default). Set the repository Actions secrets `TELEGRAM_BOT_TOKEN` and
+`TELEGRAM_CHAT_ID` before enabling delivery. Only the APK is sent, with a 50 MB
+upload limit.
+
 ---
 
 ## Installing the root module
@@ -149,6 +162,11 @@ The APK ends up at `app/build/outputs/apk/debug/app-debug.apk`.
    daemon are separate states. Zygisk capture still needs a compatible active loader.
 5. Pick a preset on the Presets tab, flip the master switch on the Home tab, then test by
    recording a voice memo or making a VoIP call.
+
+Cellular routing on Lahaina/Yupik (`lahainayupikidp`) remains experimental and
+requires handset validation. As with Lito, the daemon checks for a unique card
+with the required mixer controls and PCM endpoints; the card label is not a
+compatibility signal. App-level Zygisk capture does not need the cellular kernel patch.
 
 On Kitsune 30.7, a module containing `zygisk/` can be skipped at boot when its
 Zygisk loader is inactive (`avcrt: ignore` in the manager log). Another reboot

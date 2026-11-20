@@ -7,6 +7,9 @@ java = "17"
 
 # Android SDK
 compileSdk = "34"
+androidBuildTools = "34.0.0"
+androidNdk = "27.0.12077973"
+androidCmake = "3.22.1"
 minSdk = "31"
 targetSdk = "34"
 

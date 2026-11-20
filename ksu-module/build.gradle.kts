@@ -21,6 +21,7 @@ plugins {
 
 android {
     namespace = "dev.avcrt.ksumodule"
+    ndkVersion = libs.versions.androidNdk.get()
 
     defaultConfig {
         externalNativeBuild {
@@ -55,7 +56,7 @@ android {
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
+            version = libs.versions.androidCmake.get()
         }
     }
 
