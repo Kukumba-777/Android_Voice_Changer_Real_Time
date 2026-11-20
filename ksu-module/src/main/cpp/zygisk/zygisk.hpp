@@ -111,8 +111,10 @@ struct Api {
     void setOption(Option opt) { if (tbl->setOption) tbl->setOption(tbl->impl, opt); }
     uint32_t getFlags()     { return tbl->getFlags ? tbl->getFlags(tbl->impl) : 0; }
     bool exemptFd(int fd)   { return tbl->exemptFd && tbl->exemptFd(fd); }
-    void hookJniNativeMethods(JNIEnv *env, const char *className, JNINativeMethod *methods, int n) {
-        if (tbl->hookJniNativeMethods) tbl->hookJniNativeMethods(env, className, methods, n);
+    bool hookJniNativeMethods(JNIEnv *env, const char *className, JNINativeMethod *methods, int n) {
+        if (!tbl->hookJniNativeMethods) return false;
+        tbl->hookJniNativeMethods(env, className, methods, n);
+        return true;
     }
     void pltHookRegister(dev_t dev, ino_t inode, const char *symbol, void *newFunc, void **oldFunc) {
         if (tbl->pltHookRegister) tbl->pltHookRegister(dev, inode, symbol, newFunc, oldFunc);

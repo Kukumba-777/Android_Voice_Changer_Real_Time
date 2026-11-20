@@ -34,8 +34,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <vector>
+#include <type_traits>
 
 #include <android/log.h>
 
@@ -109,6 +111,7 @@ aa_i32 g_aa_getDirection    = nullptr;
 // Guard: legacy AAudio's AAudioStream_read internally calls AudioRecord (→ obtainBuffer). When set,
 // the obtainBuffer hook passes through so we pitch the capture exactly once (at the AAudio level).
 thread_local int g_in_aaudio = 0;
+thread_local bool g_in_java_read = false;
 // Per-callback-cycle flag: obtainBuffer sets it when it pitches (legacy callback-mode reads go
 // through AudioRecord). The data-callback wrapper consumes it: if set, the underlying obtainBuffer
 // already pitched → skip (don't double); if clear (MMAP path, no AudioRecord) → pitch here.
@@ -337,7 +340,7 @@ int hooked_obtain(void *self, void *audioBuffer, const void *requested, void *el
     // re-pitch. Set unconditionally (even before the gates / under the AAudio guard) so it's an honest
     // "this is an AudioFlinger-routed capture" marker.
     g_obtained = true;
-    if (g_in_aaudio > 0) return st;                      // legacy AAudio pitches at the AAudio level
+    if (g_in_aaudio > 0 || g_in_java_read) return st;    // outer read owns this buffer
     if (g_afhook_active.load()) return st;               // afhook already pitched it at the HAL read
 
     uint8_t *b = static_cast<uint8_t *>(audioBuffer);
@@ -390,6 +393,160 @@ int hooked_obtain(void *self, void *audioBuffer, const void *requested, void *el
     size_t proc_frames = static_cast<size_t>(end - proc) / frame_size;
     process_pcm(c, reinterpret_cast<void *>(proc), proc_frames, channels, static_cast<int>(bps));
     return st;
+}
+
+// Java AudioRecord copies samples into the caller's buffer. Hook its registered JNI
+// methods through Zygisk; this does not rewrite the native AudioRecord entry point.
+template <typename Array>
+using java_read_fn = jint (*)(JNIEnv*, jobject, Array, jint, jint, jboolean);
+template <typename Array> java_read_fn<Array> orig_java_read = nullptr;
+using java_direct_fn = jint (*)(JNIEnv*, jobject, jobject, jint, jboolean);
+java_direct_fn orig_java_direct = nullptr;
+jmethodID java_rate, java_channels, java_format;
+
+struct JavaReadScope {
+    bool previous = g_in_java_read;
+    JavaReadScope() { g_in_java_read = true; }
+    ~JavaReadScope() { g_in_java_read = previous; }
+};
+
+struct JavaStream {
+    jweak owner = nullptr;
+    StreamCtx ctx;
+    ~JavaStream() { delete ctx.engine; }
+};
+std::mutex java_mu;
+std::vector<std::unique_ptr<JavaStream>> java_streams;
+
+template <typename Process>
+void process_java(JNIEnv* env, jobject self, size_t samples, int bps, Process process) {
+    if (env->ExceptionCheck() || !samples || g_in_java_read) return;
+    maybe_refresh_config();
+    auto cfg = current_config();
+    if (!cfg.enabled || g_afhook_active.load()) return;
+    const jint rate = env->CallIntMethod(self, java_rate);
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return; }
+    const jint channels = env->CallIntMethod(self, java_channels);
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return; }
+    const jint format = env->CallIntMethod(self, java_format);
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return; }
+    // android.media.AudioFormat: ENCODING_PCM_16BIT and ENCODING_PCM_FLOAT.
+    if (rate <= 0 || channels <= 0 || samples % channels ||
+        (bps == 2 ? format != 2 : format != 4)) return;
+    std::lock_guard<std::mutex> lock(java_mu);
+    JavaStream* stream = nullptr;
+    for (auto it = java_streams.begin(); it != java_streams.end();) {
+        if (env->IsSameObject((*it)->owner, nullptr)) {
+            env->DeleteWeakGlobalRef((*it)->owner);
+            it = java_streams.erase(it);
+        } else {
+            if (env->IsSameObject((*it)->owner, self)) stream = it->get();
+            ++it;
+        }
+    }
+    if (!stream) {
+        jweak owner = env->NewWeakGlobalRef(self);
+        if (!owner) { if (env->ExceptionCheck()) env->ExceptionClear(); return; }
+        auto entry = std::make_unique<JavaStream>();
+        entry->owner = owner;
+        stream = entry.get();
+        java_streams.push_back(std::move(entry));
+    }
+    StreamCtx& ctx = stream->ctx;
+    if (!ctx.engine || ctx.rate != static_cast<uint32_t>(rate) ||
+        ctx.channels != static_cast<uint32_t>(channels)) {
+        delete ctx.engine;
+        ctx.engine = new Engine(rate, channels);
+        ctx.rate = rate;
+        ctx.channels = channels;
+        ctx.applied_rev = -2;
+    }
+    apply_cfg(&ctx, cfg);
+    const size_t frames = samples / channels;
+    if (process(&ctx, frames, channels)) {
+        static std::atomic<int> logged{0};
+        if (logged.load() < 5 && logged.fetch_add(1) < 5)
+            LOGI("java-read FIRED frames=%zu rate=%d ch=%d rev=%d", frames, rate, channels, cfg.revision);
+    }
+}
+
+template <typename Array>
+jint hooked_java_read(JNIEnv* env, jobject self, Array array, jint offset, jint count, jboolean blocking) {
+    jint got;
+    { JavaReadScope scope; got = orig_java_read<Array>(env, self, array, offset, count, blocking); }
+    if (env->ExceptionCheck() || !array || got <= 0 || offset < 0 || got > count ||
+        offset > env->GetArrayLength(array) - got) return got;
+    constexpr bool bytes = std::is_same_v<Array, jbyteArray>;
+    constexpr bool floats = std::is_same_v<Array, jfloatArray>;
+    if (bytes && got % 2) return got;
+    process_java(env, self, bytes ? got / 2 : got, floats ? 4 : 2,
+        [&](StreamCtx* ctx, size_t frames, unsigned channels) {
+            // Work on a copy, not a pinned Java array or an unaligned byte-array offset.
+            if constexpr (floats) {
+                std::vector<jfloat> data(got);
+                env->GetFloatArrayRegion(array, offset, got, data.data());
+                if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
+                process_pcm(ctx, data.data(), frames, channels, 4);
+                env->SetFloatArrayRegion(array, offset, got, data.data());
+            } else {
+                std::vector<jshort> data(bytes ? got / 2 : got);
+                if constexpr (bytes) env->GetByteArrayRegion(array, offset, got, reinterpret_cast<jbyte*>(data.data()));
+                else env->GetShortArrayRegion(array, offset, got, data.data());
+                if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
+                process_pcm(ctx, data.data(), frames, channels, 2);
+                if constexpr (bytes) env->SetByteArrayRegion(array, offset, got, reinterpret_cast<jbyte*>(data.data()));
+                else env->SetShortArrayRegion(array, offset, got, data.data());
+            }
+            if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
+            return true;
+        });
+    return got;
+}
+
+jint hooked_java_direct(JNIEnv* env, jobject self, jobject buffer, jint count, jboolean blocking) {
+    jint got;
+    { JavaReadScope scope; got = orig_java_direct(env, self, buffer, count, blocking); }
+    if (env->ExceptionCheck() || !buffer || got <= 0 || got > count ||
+        env->GetDirectBufferCapacity(buffer) < got) return got;
+    void* data = env->GetDirectBufferAddress(buffer);
+    if (!data) return got;
+    const jint format = env->CallIntMethod(self, java_format);
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return got; }
+    const int bps = format == 2 ? 2 : format == 4 ? 4 : 0;
+    if (!bps || got % bps || reinterpret_cast<uintptr_t>(data) % bps) return got;
+    process_java(env, self, got / bps, bps, [&](StreamCtx* ctx, size_t frames, unsigned channels) {
+        process_pcm(ctx, data, frames, channels, bps);
+        return true;
+    });
+    return got;
+}
+
+void install_java_read(zygisk::Api* api, JNIEnv* env) {
+    jclass cls = env->FindClass("android/media/AudioRecord");
+    if (!cls) { if (env->ExceptionCheck()) env->ExceptionClear(); return; }
+    auto getter = [&](const char* name) {
+        auto id = env->GetMethodID(cls, name, "()I");
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        return id;
+    };
+    java_rate = getter("getSampleRate");
+    java_channels = getter("getChannelCount");
+    java_format = getter("getAudioFormat");
+    env->DeleteLocalRef(cls);
+    if (!java_rate || !java_channels || !java_format) return;
+    JNINativeMethod methods[] = {
+        {"native_read_in_byte_array", "([BIIZ)I", reinterpret_cast<void*>(hooked_java_read<jbyteArray>)},
+        {"native_read_in_short_array", "([SIIZ)I", reinterpret_cast<void*>(hooked_java_read<jshortArray>)},
+        {"native_read_in_float_array", "([FIIZ)I", reinterpret_cast<void*>(hooked_java_read<jfloatArray>)},
+        {"native_read_in_direct_buffer", "(Ljava/lang/Object;IZ)I", reinterpret_cast<void*>(hooked_java_direct)},
+    };
+    if (!api->hookJniNativeMethods(env, "android/media/AudioRecord", methods, 4)) return;
+    orig_java_read<jbyteArray> = reinterpret_cast<java_read_fn<jbyteArray>>(methods[0].fnPtr);
+    orig_java_read<jshortArray> = reinterpret_cast<java_read_fn<jshortArray>>(methods[1].fnPtr);
+    orig_java_read<jfloatArray> = reinterpret_cast<java_read_fn<jfloatArray>>(methods[2].fnPtr);
+    orig_java_direct = reinterpret_cast<java_direct_fn>(methods[3].fnPtr);
+    LOGI("AudioRecord JNI hooks: byte=%d short=%d float=%d direct=%d", !!orig_java_read<jbyteArray>,
+         !!orig_java_read<jshortArray>, !!orig_java_read<jfloatArray>, !!orig_java_direct);
 }
 
 // Pitch an AAudio capture buffer (stream's client format from the public getters). No overlap —
@@ -491,9 +648,10 @@ void try_hooks() {
                 g_obtain_hooked.store(true);   // attempt once per resolve
                 resolve_ar_getters(h);
                 int reason = 0;
-                void *tr = avcrt::avcrt_inline_hook(addr, (void *)hooked_obtain, &reason);
+                const char *detail = nullptr;
+                void *tr = avcrt::avcrt_inline_hook(addr, (void *)hooked_obtain, &reason, &detail);
                 if (tr) { orig_obtain = (obtain_fn)tr; LOGI("hooked AudioRecord::obtainBuffer @%p", addr); }
-                else    LOGW("obtainBuffer hook SKIPPED @%p reason=%d (1=prologue 2=write 3=mem)", addr, reason);
+                else    LOGW("obtainBuffer hook SKIPPED @%p reason=%d detail=%s", addr, reason, detail ? detail : "n/a");
             }
         }
     }
@@ -509,17 +667,18 @@ void try_hooks() {
                 g_aa_getSampleRate   = (aa_i32)dlsym(ha, "AAudioStream_getSampleRate");
                 g_aa_getDirection    = (aa_i32)dlsym(ha, "AAudioStream_getDirection");
                 int reason = 0;
+                const char *detail = nullptr;
                 // Hook 2: blocking AAudio read (follow the B-thunk to the real impl).
                 void *rd_real = follow_b_thunk(rd);
-                void *tr = avcrt::avcrt_inline_hook(rd_real, (void *)hooked_aaudio_read, &reason);
+                void *tr = avcrt::avcrt_inline_hook(rd_real, (void *)hooked_aaudio_read, &reason, &detail);
                 if (tr) { orig_aaudio_read = (aaudio_read_fn)tr; LOGI("hooked AAudioStream_read @%p (real %p)", rd, rd_real); }
-                else    LOGW("AAudioStream_read hook SKIPPED @%p reason=%d", rd_real, reason);
+                else    LOGW("AAudioStream_read hook SKIPPED @%p reason=%d detail=%s", rd_real, reason, detail ? detail : "n/a");
                 // Hook 3: data-callback registration (wrap the app callback for callback-mode capture).
                 void *sc_real = follow_b_thunk(sc);
                 reason = 0;
-                void *tr2 = avcrt::avcrt_inline_hook(sc_real, (void *)hooked_set_data_callback, &reason);
+                void *tr2 = avcrt::avcrt_inline_hook(sc_real, (void *)hooked_set_data_callback, &reason, &detail);
                 if (tr2) { orig_set_data_cb = (set_data_cb_fn)tr2; LOGI("hooked setDataCallback @%p (real %p)", sc, sc_real); }
-                else     LOGW("setDataCallback hook SKIPPED @%p reason=%d", sc_real, reason);
+                else     LOGW("setDataCallback hook SKIPPED @%p reason=%d detail=%s", sc_real, reason, detail ? detail : "n/a");
             }
         }
     }
@@ -535,7 +694,9 @@ void *hook_poller(void *) {
 
 class AvcrtModule : public zygisk::ModuleBase {
 public:
-    void onLoad(zygisk::Api *api, JNIEnv *) override { g_api = api; }
+    void onLoad(zygisk::Api *api, JNIEnv *env) override { g_api = api; env_ = env; }
+
+    void preAppSpecialize(zygisk::AppSpecializeArgs *) override { install_java_read(g_api, env_); }
 
     void postAppSpecialize(const zygisk::AppSpecializeArgs *) override {
         refresh_config();   // prime (prop may be unset on a fresh boot)
@@ -547,6 +708,8 @@ public:
         LOGI("avcrt zygisk init");
         // The module .so must stay mapped (our hooks + trampolines live in it) — no DLCLOSE.
     }
+private:
+    JNIEnv* env_ = nullptr;
 };
 
 }  // namespace

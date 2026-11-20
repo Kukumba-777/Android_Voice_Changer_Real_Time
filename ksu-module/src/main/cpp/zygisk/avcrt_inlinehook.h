@@ -100,8 +100,10 @@ inline bool avcrt_write_code(void* addr, const void* data, size_t len) {
 // Inline-hook `target` to call `replacement`. Returns a trampoline (call it with the original
 // signature to run the original) on success, or nullptr if the prologue isn't copy-safe / the
 // code write failed. `*reason` (optional) explains a nullptr.
-inline void* avcrt_inline_hook(void* target, void* replacement, int* reason = nullptr) {
+inline void* avcrt_inline_hook(void* target, void* replacement, int* reason = nullptr,
+                               const char** detail = nullptr) {
     auto set_reason = [&](int r) { if (reason) *reason = r; };
+    if (detail) *detail = nullptr;
 
     const uint32_t* code = static_cast<const uint32_t*>(target);
     uint32_t i0 = code[0];
@@ -112,14 +114,16 @@ inline void* avcrt_inline_hook(void* target, void* replacement, int* reason = nu
         lead = 4;
     } else if (insn_is_pac_entry(i0)) {
         set_reason(HOOK_UNSAFE_PROLOGUE);
+        if (detail) *detail = "PAC entry";
         return nullptr;  // PAC entry — can't safely replicate the sign-LR context
     }
 
     // The 16-byte jump overwrites 4 instructions after the lead-in; all must be copy-safe.
     const size_t copy_len = lead + kJumpLen;          // bytes overwritten at target
     for (size_t k = lead / 4; k < copy_len / 4; ++k) {
-        if (insn_is_pc_relative(code[k])) {
+        if (insn_is_pac_entry(code[k]) || insn_is_pc_relative(code[k])) {
             set_reason(HOOK_UNSAFE_PROLOGUE);
+            if (detail) *detail = insn_is_pac_entry(code[k]) ? "PAC in copy region" : "PC-relative instruction";
             return nullptr;
         }
     }
