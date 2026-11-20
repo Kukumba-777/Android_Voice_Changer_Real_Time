@@ -29,13 +29,11 @@ class ExternalLogReaderImpl @Inject constructor(
 
     override suspend fun read(source: ExternalLogSource): AvcrtResult<List<LogEntry>> {
         val (command, tag) = when (source) {
-            // tail the supervisor's appended log; 2>/dev/null so a missing file
-            // just yields empty output rather than an error line.
+            // Never display a persisted daemon log that belongs to another boot.
             ExternalLogSource.DAEMON ->
-                "tail -n $MAX_LINES ${AvcrtPaths.DAEMON_LOG_FILE} 2>/dev/null" to "avcrtd"
-            // -t dumps the last N matching lines and exits.
+                "if ${AvcrtPaths.CURRENT_DAEMON_LOG_GUARD}; then tail -n $MAX_LINES '${AvcrtPaths.DAEMON_LOG_FILE}'; fi" to "avcrtd"
             ExternalLogSource.ZYGISK ->
-                "logcat -d -t $MAX_LINES -v time -s avcrtzy:V avcrtfx:V" to "zygisk"
+                "(set -o pipefail; logcat -d -v threadtime -s avcrtzy:V avcrtaf:V avcrtfx:V | tail -n $MAX_LINES)" to "zygisk"
             ExternalLogSource.KERNEL ->
                 "dmesg 2>/dev/null | grep -i avcrt | tail -n $MAX_LINES" to "kernel"
         }
@@ -47,6 +45,7 @@ class ExternalLogReaderImpl @Inject constructor(
         return stdout.lineSequence()
             .map { it.trimEnd() }
             .filter { it.isNotBlank() }
+            .filterNot { it.startsWith("--------- beginning of ") }
             .map { line ->
                 LogEntry(
                     id = id++,
@@ -60,7 +59,7 @@ class ExternalLogReaderImpl @Inject constructor(
             .toList()
     }
 
-    /** Logcat `-v time` lines start with ` P/TAG`; fall back to a keyword scan. */
+    /** Parse the priority column in logcat threadtime output, otherwise use keywords. */
     private fun detectLevel(line: String): LogLevel {
         LOGCAT_LEVEL.find(line)?.groupValues?.getOrNull(1)?.let { letter ->
             when (letter) {
@@ -83,6 +82,6 @@ class ExternalLogReaderImpl @Inject constructor(
 
     private companion object {
         const val MAX_LINES = 400
-        val LOGCAT_LEVEL = Regex(" ([VDIWEF])/")
+        val LOGCAT_LEVEL = Regex("^\\d{2}-\\d{2}\\s+\\S+\\s+\\d+\\s+\\d+\\s+([VDIWEF])\\s+")
     }
 }

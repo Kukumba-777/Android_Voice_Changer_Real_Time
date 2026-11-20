@@ -59,6 +59,7 @@ class LogsViewModel @Inject constructor(
     private val filter = MutableStateFlow(LogFilter.ALL)
     private val external = MutableStateFlow(ExternalState())
     private val externalEntries = MutableStateFlow<List<LogEntry>>(emptyList())
+    private var refreshGeneration = 0L
 
     val state: StateFlow<LogsUiState> = combine(
         logs.observeEntries(),
@@ -80,7 +81,8 @@ class LogsViewModel @Inject constructor(
 
     fun selectSource(source: LogSource) {
         if (external.value.source == source) return
-        external.update { it.copy(source = source, error = null) }
+        refreshGeneration++
+        external.value = ExternalState(source = source)
         externalEntries.value = emptyList()
         if (source != LogSource.APP) refresh()
     }
@@ -89,15 +91,20 @@ class LogsViewModel @Inject constructor(
         val source = external.value.source
         if (source == LogSource.APP) return
         val domainSource = source.toDomain() ?: return
+        val generation = ++refreshGeneration
         viewModelScope.launch {
+            if (generation != refreshGeneration) return@launch
             external.update { it.copy(loading = true, error = null) }
             when (val res = externalReader.read(domainSource)) {
                 is AvcrtResult.Success -> {
+                    if (generation != refreshGeneration) return@launch
                     externalEntries.value = res.value
                     external.update { it.copy(loading = false) }
                 }
-                is AvcrtResult.Failure ->
+                is AvcrtResult.Failure -> {
+                    if (generation != refreshGeneration) return@launch
                     external.update { it.copy(loading = false, error = res.error.message) }
+                }
             }
         }
     }
@@ -105,7 +112,13 @@ class LogsViewModel @Inject constructor(
     /** Clear only makes sense for the in-memory APP log; for external sources it
      *  just empties the on-screen snapshot (the underlying logs are untouched). */
     fun clear() {
-        if (external.value.source == LogSource.APP) logs.clear() else externalEntries.value = emptyList()
+        if (external.value.source == LogSource.APP) {
+            logs.clear()
+        } else {
+            refreshGeneration++
+            externalEntries.value = emptyList()
+            external.update { it.copy(loading = false, error = null) }
+        }
     }
 
     private fun LogSource.toDomain(): ExternalLogSource? = when (this) {
