@@ -42,4 +42,11 @@ sealed interface RootStatus {
     data class Available(val provider: RootProvider, val granted: Boolean) : RootStatus
 }
 
-enum class RootProvider { KERNELSU, MAGISK, GENERIC_SU, UNKNOWN }
+enum class RootProvider {
+    KERNELSU, MAGISK, GENERIC_SU, UNKNOWN;
+
+    companion object {
+        // PATH first; KernelSU also installs its CLI under its documented data directory.
+        const val KSU_COMMAND = "ksu=\$(command -v ksud 2>/dev/null) || ksu=/data/adb/ksud"
+    }
+}

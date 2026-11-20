@@ -41,13 +41,9 @@ class LibsuRootAccess @Inject constructor(
     override suspend fun requestAccess(): AvcrtResult<Unit> = withContext(dispatchers.io) {
         try {
             val shell = Shell.getShell()
-            val provider = detectProvider()
             val granted = shell.isRoot
-            _status.value = if (provider == null) {
-                RootStatus.Unavailable
-            } else {
-                RootStatus.Available(provider, granted)
-            }
+            val provider = if (granted) detectProvider() else RootProvider.GENERIC_SU
+            _status.value = RootStatus.Available(provider, granted)
             if (granted) AvcrtResult.Success(Unit)
             else AvcrtResult.Failure(AvcrtError.RootDenied())
         } catch (t: Throwable) {
@@ -97,12 +93,22 @@ class LibsuRootAccess @Inject constructor(
         runCatching { SuFile(path).exists() }.getOrDefault(false)
     }
 
-    private fun detectProvider(): RootProvider? = when {
-        SuFile("/data/adb/ksu").exists() ||
-            SuFile("/data/adb/ksud").exists() -> RootProvider.KERNELSU
-        SuFile("/data/adb/magisk").exists() -> RootProvider.MAGISK
-        Shell.cmd("which su").exec().isSuccess -> RootProvider.GENERIC_SU
-        else -> null
+    private fun detectProvider(): RootProvider {
+        val result = Shell.cmd("""
+            if command -v magisk >/dev/null 2>&1 && [ "${'$'}(magisk -V 2>/dev/null)" -gt 0 ] 2>/dev/null; then
+                echo magisk
+            fi
+            ${RootProvider.KSU_COMMAND}
+            if [ -x "${'$'}ksu" ] && "${'$'}ksu" module list >/dev/null 2>&1; then
+                echo ksu
+            fi
+        """.trimIndent()).exec()
+        return when (result.out.toSet()) {
+            setOf("magisk") -> RootProvider.MAGISK
+            setOf("ksu") -> RootProvider.KERNELSU
+            emptySet<String>() -> RootProvider.GENERIC_SU
+            else -> RootProvider.UNKNOWN
+        }
     }
 
     companion object {
