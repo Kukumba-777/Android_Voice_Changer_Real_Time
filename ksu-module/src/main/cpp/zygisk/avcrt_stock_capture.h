@@ -63,11 +63,19 @@ Registration install_required_jni(Api* api, Env* env, Class cls, const char* nam
 
 // Sample the live master switch even before the cached DSP revision changes.
 template <typename Enabled>
-bool aac_allowed(Enabled enabled) {
-    return enabled("avcrt.dsp.enabled") && !enabled(af_backend::kProperty) &&
-        !enabled("debug.avcrt.af_capture") && !enabled("debug.avcrt.stagefright");
+bool direct_aac_allowed(Enabled enabled) {
+    // Direct AAC transcodes the original compressed stream; it does not open a
+    // replacement PCM capture. The caller must verify AAC on the device side.
+    return enabled("avcrt.dsp.enabled") && !enabled("debug.avcrt.af_capture") &&
+        !enabled("debug.avcrt.stagefright");
 }
 
+template <typename Enabled>
+bool aac_allowed(Enabled enabled) {
+    return direct_aac_allowed(enabled) && !enabled(af_backend::kProperty);
+}
+
+bool direct_aac_allowed();
 bool aac_allowed();
 
 } // namespace avcrt::stock_capture

@@ -1,22 +1,14 @@
-// avcrt_afhook — universal, system-wide voice change at the AudioFlinger HAL-read layer.
-//
-// Loaded (via root ptrace remote-dlopen) into the audioserver process. INLINE-hooks the ONE
-// chokepoint every mic capture passes through, regardless of which app/process owns it:
+// avcrt_afhook — shared voice processing for PCM on the AudioFlinger HAL-read path:
 //
 //     android::AudioStreamIn::read(void* buffer, size_t bytes, size_t* read)
 //        resolved from already-loaded objects that export the supported ABI.
 //
-// AudioFlinger's RecordThread::threadLoop pulls the raw mic from the input HAL through this for
-// EVERY input stream, at the device's native format, BEFORE distributing to per-track consumers.
-// Pitching the buffer here changes the voice for EVERYTHING — apps (AudioRecord/OpenSL/AAudio),
-// MediaRecorder captures that run in mediaserver (OnePlus camera video, screen recorders, …), the
-// lot — in a single place. This is what the per-process Zygisk hook can't reach (mediaserver is a
-// non-zygote init service).
+// This operates before per-track delivery. Paths that bypass this entry and
+// streams without a supported format are not processed here.
 //
 // Format/rate/channels: AudioStreamIn's own getters aren't exported, but
 //     android::AudioStreamIn::getAudioProperties() const   (exported)
-// returns audio_config_base_t{sample_rate, channel_mask, format} by value — we query it ONCE per
-// stream object and cache it.
+// returns audio_config_base_t{sample_rate, channel_mask, format} by value.
 //
 // Reuses the proven avcrt::Engine (SoundTouch + the Phase-6 effect chain) and the self-checking
 // avcrt_inlinehook.h (skips gracefully if a ROM's prologue isn't copy-safe — never crashes).
@@ -31,11 +23,11 @@
 #include <sys/system_properties.h>
 #include <unistd.h>
 #include <atomic>
+#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -47,6 +39,8 @@
 #include "avcrt_paths.h"
 #include "avcrt_config.h"   // DspConfig
 #include "avcrt_af_backend.h"
+#include "avcrt_capture_contract.h"
+#include "avcrt_pcm24.h"
 
 #define LOG_TAG "avcrtaf"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -56,6 +50,7 @@ using avcrt::DspConfig;
 using avcrt::Engine;
 
 namespace {
+namespace pcm = avcrt::capture_contract;
 
 // ---- live config snapshot (mirrored from avcrt.dsp.* props), identical layout to the Zygisk hook ----
 struct WireConfig {
@@ -187,55 +182,39 @@ struct AfConfigBase { uint32_t sample_rate; uint32_t channel_mask; uint32_t form
 using getprops_fn = AfConfigBase (*)(const void *);
 getprops_fn g_getAudioProperties = nullptr;
 
-// audio_format_t (stable ABI): PCM_16_BIT=0x1, PCM_FLOAT=0x5. We pitch 16-bit and float; else skip.
-int bps_for_format(uint32_t fmt) {
-    if (fmt == 0x1) return 2;
-    if (fmt == 0x5) return 4;
-    return 0;
-}
 uint32_t channels_from_mask(uint32_t mask) {
     uint32_t c = static_cast<uint32_t>(__builtin_popcount(mask & 0x3FFFFFu));
     return c >= 1 && c <= 8 ? c : 0;
 }
 
-// ---- per-stream pitch engine, keyed by AudioStreamIn* ----
+// ---- one stream context on its reader thread ----
 struct StreamCtx {
-    Engine  *engine = nullptr;
+    const void* stream = nullptr;
+    std::unique_ptr<Engine> engine;
     uint32_t rate = 0;
     uint32_t channels = 0;
-    int      bps = 0;            // 2=int16, 4=float, 0=passthrough (probe failed / unsupported fmt)
+    pcm::Sample sample = pcm::Sample::Unsupported;
     int64_t  applied_rev = -2;
-    bool     probed = false;
-    std::vector<int16_t> i16;   // scratch for float<->int16
+    std::vector<int16_t> i16;   // scratch for float and packed PCM24
+    bool logged_processed = false;
 };
-std::mutex g_streams_mu;
-std::map<const void *, StreamCtx *> g_streams;
 
 StreamCtx *ctx_for(const void *self) {
-    std::lock_guard<std::mutex> lk(g_streams_mu);
-    auto it = g_streams.find(self);
-    StreamCtx *c;
-    if (it == g_streams.end()) { c = new StreamCtx(); g_streams[self] = c; }
-    else                        { c = it->second; }
-    if (!c->probed) {
-        c->probed = true;       // probe exactly once per stream (getAudioProperties is a live HAL query)
-        AfConfigBase ac{0, 0, 0};
-        if (g_getAudioProperties) ac = g_getAudioProperties(self);
-        uint32_t rate = ac.sample_rate;
-        uint32_t ch   = channels_from_mask(ac.channel_mask);
-        int bps       = bps_for_format(ac.format);
-        if (rate < 4000 || rate > 192000) { rate = 0; bps = 0; }  // nonsense → passthrough
-        c->rate = rate; c->channels = ch; c->bps = bps;
-        if (bps != 0 && rate != 0 && ch != 0) {
-            c->engine = new Engine(rate, ch, /*soundboard=*/true);
-            c->applied_rev = -2;
-        }
-        static int dbg = 0;
-        if (dbg < 8) { LOGI("stream %p props: rate=%u ch=%u fmt=0x%x -> bps=%d %s",
-                            self, ac.sample_rate, ch, ac.format, bps,
-                            c->engine ? "PITCHED" : "passthrough"); dbg++; }
-    }
-    return c;
+    // Record readers are recreated with their input. Don't carry a cached
+    // format or DSP state into a new reader that reuses an old stream address.
+    thread_local StreamCtx c;
+    if (c.stream == self) return &c;
+    c = {};
+    c.stream = self;
+    const AfConfigBase ac = g_getAudioProperties(self);
+    c.rate = ac.sample_rate;
+    c.channels = channels_from_mask(ac.channel_mask);
+    c.sample = pcm::hal_sample(ac.format);
+    if (c.rate >= 4000 && c.rate <= 192000 && c.channels && pcm::sample_bytes(c.sample))
+        c.engine = std::make_unique<Engine>(c.rate, c.channels, /*soundboard=*/true);
+    LOGI("stream %p props: rate=%u ch=%u fmt=0x%x %s", self, c.rate, c.channels,
+         ac.format, c.engine ? "PITCHED" : "passthrough");
+    return &c;
 }
 
 void apply_cfg(StreamCtx *c, const WireConfig &cfg) {
@@ -253,15 +232,24 @@ void apply_cfg(StreamCtx *c, const WireConfig &cfg) {
     c->applied_rev = cfg.revision;
 }
 
-// Pitch `frames` of interleaved PCM in place. bps=2 → int16; bps=4 → 32-bit float (via int16 scratch).
-void process_pcm(StreamCtx *c, void *raw, size_t frames, uint32_t channels, int bps) {
-    if (frames == 0 || !c->engine) return;
-    if (bps == 2) {
+void process_pcm(StreamCtx *c, void *raw, size_t frames) {
+    if (c->sample == pcm::Sample::S16) {
         c->engine->process(static_cast<int16_t *>(raw), frames);
+    } else if (c->sample == pcm::Sample::Packed24) {
+        auto* packed = static_cast<uint8_t*>(raw);
+        if (c->engine->voiceBypassed()) {
+            c->engine->mixSoundPacked24(packed, frames);
+            return;
+        }
+        const size_t n = frames * c->channels;
+        if (c->i16.size() < n) c->i16.resize(n);
+        for (size_t i = 0; i < n; ++i) c->i16[i] = avcrt::pcm24_to_s16(packed + i * 3);
+        if (!c->engine->process(c->i16.data(), frames)) return;
+        for (size_t i = 0; i < n; ++i) avcrt::s16_to_pcm24(c->i16[i], packed + i * 3);
     } else if (c->engine->voiceBypassed()) {
         c->engine->mixSound(static_cast<float*>(raw), frames);
-    } else {  // bps == 4 → float PCM
-        size_t n = frames * channels;
+    } else {  // float PCM
+        const size_t n = frames * c->channels;
         if (c->i16.size() < n) c->i16.resize(n);
         float *fb = static_cast<float *>(raw);
         for (size_t i = 0; i < n; i++) {
@@ -298,17 +286,20 @@ int hooked_read(void *self, void *buffer, size_t bytes, size_t *read) {
     WireConfig cfg = current_config();
     if (!cfg.enabled) return st;
 
-    uint32_t channels = c->channels;
-    size_t frame_size = static_cast<size_t>(channels) * static_cast<size_t>(c->bps);
-    if (frame_size == 0 || got % frame_size != 0) return st;
-    size_t frames = got / frame_size;
-    if (frames == 0) return st;
+    const size_t bps = pcm::sample_bytes(c->sample);
+    const size_t frame_size = c->channels * bps;
+    if (got % frame_size || (c->sample != pcm::Sample::Packed24 &&
+                            reinterpret_cast<uintptr_t>(buffer) % bps)) return st;
+    const size_t frames = got / frame_size;
+    if (got / bps > UINT_MAX) return st; // The engine passes unsigned counts to SoundTouch.
 
     apply_cfg(c, cfg);
-    process_pcm(c, buffer, frames, channels, c->bps);
-    static std::atomic<unsigned> logged{0};
-    if (logged.load() < 5 && logged.fetch_add(1) < 5)
-        LOGI("AF PCM processed frames=%zu ch=%u bps=%d rev=%d", frames, channels, c->bps, cfg.revision);
+    process_pcm(c, buffer, frames);
+    if (!c->logged_processed) {
+        c->logged_processed = true;
+        LOGI("AF PCM processed stream=%p frames=%zu ch=%u bps=%zu rev=%d",
+             self, frames, c->channels, bps, cfg.revision);
+    }
     return st;
 }
 
@@ -367,7 +358,8 @@ bool try_install() {
     refresh_config();
     int reason = 0;
     const char* detail = nullptr;
-    void *tr = avcrt::avcrt_inline_hook(addr, (void *)hooked_read, &reason, &detail, publish_original_read);
+    void *tr = avcrt::avcrt_inline_hook(addr, (void *)hooked_read, &reason, &detail,
+                                       publish_original_read, /*allow_pac=*/true);
     if (!tr) {
         dlclose(candidate.handle);
         LOGW("AudioStreamIn::read hook SKIPPED @%p reason=%d detail=%s",
@@ -375,8 +367,8 @@ bool try_install() {
     } else if (__system_property_set(avcrt::af_backend::kProperty, pid) != 0) {
         LOGW("AudioStreamIn::read installed in pass-through: claim publication failed (pid=%s)", pid);
     } else {
-        LOGI("inline-hooked AudioStreamIn::read @%p (getProps=%p); exclusive backend claim pid=%s",
-             addr, (void *)g_getAudioProperties, pid);
+        LOGI("inline-hooked AudioStreamIn::read @%p (getProps=%p, %s); exclusive backend claim pid=%s",
+             addr, (void *)g_getAudioProperties, detail ? detail : "standard entry", pid);
     }
     return true;
 }

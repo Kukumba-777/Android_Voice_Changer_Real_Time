@@ -18,7 +18,7 @@ internal object SoundDecoder {
     private const val RAW_AUDIO = "audio/raw"
     private const val TIMEOUT_US = 10_000L
 
-    suspend fun decode(path: String): ByteArray {
+    suspend fun decode(path: String, clipGain: Float): ByteArray {
         val scope = currentCoroutineContext()
         val extractor = MediaExtractor()
         try {
@@ -85,7 +85,7 @@ internal object SoundDecoder {
                 }
             }
             scope.ensureActive()
-            return pcm.toPcm16()
+            return pcm.toPcm16(clipGain)
         } finally {
             extractor.release()
         }
@@ -148,7 +148,7 @@ internal object SoundDecoder {
             }
         }
 
-        fun toPcm16(): ByteArray {
+        fun toPcm16(clipGain: Float): ByteArray {
             check(count > 0) { "Empty decoded audio" }
             val frames = (count.toLong() * SAMPLE_RATE / rate).toInt().coerceAtLeast(1)
             val output = ByteBuffer.allocate(frames * Short.SIZE_BYTES).order(ByteOrder.LITTLE_ENDIAN)
@@ -158,7 +158,8 @@ internal object SoundDecoder {
                 val fraction = (offset % SAMPLE_RATE).toFloat() / SAMPLE_RATE
                 val a = mono[start]
                 val b = mono[(start + 1).coerceAtMost(count - 1)]
-                output.putShort(((a + fraction * (b - a)) * 32768).roundToInt().coerceIn(-32768, 32767).toShort())
+                val sample = (a + fraction * (b - a)) * clipGain
+                output.putShort((sample * 32768).roundToInt().coerceIn(-32768, 32767).toShort())
             }
             return output.array()
         }

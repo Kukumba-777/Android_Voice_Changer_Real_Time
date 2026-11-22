@@ -12,6 +12,7 @@
     <string name="overlay_no_sounds">Импортируйте клипы в разделе «Файлы → Звуки».</string>
     <string name="overlay_sort_name">По имени</string>
     <string name="overlay_sort_recent">Сначала новые</string>
+    <string name="overlay_clip_volume">Громкость клипа: %1$d%%</string>
     <string name="overlay_play_clip">Проиграть %1$s в поток микрофона</string>
     <string name="overlay_stop_clip">Остановить %1$s</string>
     <string name="overlay_channel_name">Окно AVCRT</string>

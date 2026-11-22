@@ -4,17 +4,17 @@ AVCRT is a real-time voice changer for rooted Android devices. It provides an
 Android app for controlling voice presets and a root module with native audio
 processing backends.
 
-The project has been tested on **POCO F6** and **OnePlus Nord**. Results depend
-on the device, Android build, root setup, and the audio path used by each app;
-not every recorder, camera, VoIP app, or phone call is guaranteed to work.
+Results depend on the Android build, root setup, and the audio path used by
+each app; not every recorder, camera, VoIP app, or phone call is guaranteed to
+work.
 
 ## What works
 
 - **App audio capture:** The Zygisk backend processes supported microphone
   capture in app processes, including compatible `AudioRecord` paths. Testing
-  confirmed changed voice in saved Camera, Telegram, and Recorder audio on
-  POCO F6 and OnePlus Nord. An app that delegates recording to a separate
-  service or uses an unsupported audio format/path may not be processed.
+  confirmed changed voice in saved Camera, Telegram, and Recorder audio.
+  An app that delegates recording to a separate service or uses an unsupported
+  audio format/path may not be processed.
 - **GSM/cellular calls:** Voice processing in cellular calls requires a
   compatible kernel with the AVCRT kernel patches. This has so far been tested
   on **OnePlus Nord only**. Support on other devices and kernels is unverified.
@@ -91,6 +91,11 @@ the module and reboot as needed.
   by Android on the device. In the floating window, open **Sounds** to sort and
   play/stop clips. Playback mixes a single clip into supported microphone capture
   after the voice DSP; it does not play through the device speaker.
+- **Clip volume** (10–100%, default 100%) adjusts the clip, not the microphone.
+- If speech comes through but music cuts out in a WhatsApp call, turn off
+  **Noise cancellation** in the WhatsApp call menu, if available. This is
+  WhatsApp's own setting; there is no need to change Android's audio effects
+  or AVCRT's gain to fix those music dropouts.
 - Use **Original voice** with AVCRT still enabled to bypass voice DSP while keeping
   the soundboard available. In cellular calls AVCRT still uses its existing uplink
   route, so levels and device compatibility can differ from an unmodified call.

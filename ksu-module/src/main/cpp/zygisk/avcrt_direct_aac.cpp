@@ -48,7 +48,7 @@ struct Java {
     jclass activity{};
     jmethodID application{}, service{}, config{}, equals{}, muted{}, silenced{};
     jmethodID format{}, source{}, rate{}, channels{}, port{}, client_port{}, client_source{};
-    jmethodID client_format{}, config_format{}, config_rate{}, config_channels{};
+    jmethodID client_format{}, device_format{}, config_format{}, config_rate{}, config_channels{};
     jmethodID device{}, device_type{}, device_id{};
 } j;
 
@@ -76,6 +76,7 @@ bool resolve(JNIEnv* env, jclass audio) {
     METHOD(client_port, config, "getClientPortId", "()I");
     METHOD(client_source, config, "getClientAudioSource", "()I");
     METHOD(client_format, config, "getClientFormat", "()Landroid/media/AudioFormat;");
+    METHOD(device_format, config, "getFormat", "()Landroid/media/AudioFormat;");
     METHOD(config_format, format, "getEncoding", "()I");
     METHOD(config_rate, format, "getSampleRate", "()I");
     METHOD(config_channels, format, "getChannelCount", "()I");
@@ -363,6 +364,12 @@ struct Session {
         if (clear_exception(env) || !format) return Safe::Unavailable;
         if (!is_int(format, j.config_format, kAacLc) || !is_int(format, j.config_rate, rate) ||
             !is_int(format, j.config_channels, channels)) return mismatch;
+        // A compressed client alone doesn't rule out upstream PCM DSP. Only
+        // transcode a matching AAC device stream, which the shared hook skips.
+        jobject hal_format = env->CallObjectMethod(cfg, j.device_format);
+        if (clear_exception(env) || !hal_format) return Safe::Unavailable;
+        if (!is_int(hal_format, j.config_format, kAacLc) || !is_int(hal_format, j.config_rate, rate) ||
+            !is_int(hal_format, j.config_channels, channels)) return mismatch;
         initial_config = env->NewGlobalRef(cfg);
         if (clear_exception(env) || !initial_config) return Safe::Unavailable;
         route = id;
@@ -433,7 +440,7 @@ jint start(JNIEnv* env, jobject self, jint event, jint sync_session) {
         }
     }
     try {
-        if (!stock_capture::aac_allowed() || event != 0 || integer(env, self, j.format) != kAacLc ||
+        if (!stock_capture::direct_aac_allowed() || event != 0 || integer(env, self, j.format) != kAacLc ||
             integer(env, self, j.source) != kCamcorder) return ret;
         const int rate = integer(env, self, j.rate), channels = integer(env, self, j.channels);
         const int port = integer(env, self, j.port);

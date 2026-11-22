@@ -412,12 +412,19 @@ jint recorder_read(JNIEnv* env, jobject self, jmethodID method, jshortArray buf,
     return env->CallIntMethod(self, method, buf, 0, count, 1); // AudioRecord.READ_NON_BLOCKING.
 }
 
-bool stock_aac_config(DspConfig& result) {
-    if (!avcrt::stock_capture::aac_allowed()) return false;
+bool capture_config(DspConfig& result) {
     maybe_refresh_config();
     const auto cfg = current_config();
     result = engine_config(cfg);
     return cfg.enabled != 0;
+}
+
+bool stock_aac_config(DspConfig& result) {
+    return avcrt::stock_capture::aac_allowed() && capture_config(result);
+}
+
+bool direct_aac_config(DspConfig& result) {
+    return avcrt::stock_capture::direct_aac_allowed() && capture_config(result);
 }
 
 struct JavaStream {
@@ -740,7 +747,7 @@ public:
         // Probe independently in Zygisk app processes, including when DSP is
         // off. The live switch and each session's contract govern replacement.
         if (orig_java_direct) {
-            avcrt::direct_aac::install(g_api, env_, stock_java_direct, stock_aac_config);
+            avcrt::direct_aac::install(g_api, env_, stock_java_direct, direct_aac_config);
         }
         avcrt::recorder::install(g_api, env_, recorder_read, stock_aac_config);
         env_->PopLocalFrame(nullptr);
@@ -767,6 +774,10 @@ bool avcrt::stock_capture::aac_allowed() {
         if (std::strcmp(key, avcrt::af_backend::kProperty) == 0) return avcrt::af_backend::claimed();
         return prop_i(key, 0) != 0;
     });
+}
+
+bool avcrt::stock_capture::direct_aac_allowed() {
+    return direct_aac_allowed([](const char* key) { return prop_i(key, 0) != 0; });
 }
 
 REGISTER_ZYGISK_MODULE(AvcrtModule)

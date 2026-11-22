@@ -35,6 +35,6 @@ sealed interface SoundboardState {
 
 interface Soundboard {
     val state: StateFlow<SoundboardState>
-    suspend fun play(id: String): AvcrtResult<Unit>
+    suspend fun play(id: String, clipVolumePercent: Int = 100): AvcrtResult<Unit>
     suspend fun stop(): AvcrtResult<Unit>
 }

@@ -12,6 +12,7 @@
     <string name="overlay_no_sounds">Import clips in Files → Sounds.</string>
     <string name="overlay_sort_name">By name</string>
     <string name="overlay_sort_recent">Newest first</string>
+    <string name="overlay_clip_volume">Clip volume: %1$d%%</string>
     <string name="overlay_play_clip">Play %1$s into the microphone stream</string>
     <string name="overlay_stop_clip">Stop %1$s</string>
     <string name="overlay_channel_name">AVCRT overlay</string>

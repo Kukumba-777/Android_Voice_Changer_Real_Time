@@ -360,9 +360,9 @@ class OverlayService : Service() {
         }
     }
 
-    private fun playClip(id: String) {
+    private fun playClip(id: String, clipVolumePercent: Int) {
         playJob?.cancel()
-        playJob = scope.launch { showFailure(soundboard.play(id)) }
+        playJob = scope.launch { showFailure(soundboard.play(id, clipVolumePercent)) }
     }
 
     private fun stopClip() {

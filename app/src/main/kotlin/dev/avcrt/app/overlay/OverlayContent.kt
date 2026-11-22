@@ -38,6 +38,7 @@ import dev.avcrt.domain.media.SoundboardState
 import dev.avcrt.domain.preset.Preset
 import dev.avcrt.domain.preset.PresetOrigin
 import java.text.Collator
+import kotlin.math.roundToInt
 
 private enum class OverlayTab { PRESETS, SOUNDS }
 private enum class SoundSort { NAME, RECENT }
@@ -59,12 +60,13 @@ internal fun OverlayRoot(
     onToggleExpand: () -> Unit,
     onToggleEngine: (Boolean) -> Unit,
     onPickPreset: (String) -> Unit,
-    onPlay: (String) -> Unit,
+    onPlay: (String, Int) -> Unit,
     onStop: () -> Unit,
 ) {
     var tab by remember { mutableStateOf(OverlayTab.PRESETS) }
     var category by remember { mutableStateOf(PresetOrigin.BUILT_IN) }
     var sort by remember { mutableStateOf(SoundSort.NAME) }
+    var clipVolume by remember { mutableFloatStateOf(100f) }
     val config = LocalConfiguration.current
     val locale = config.locales[0]
     val compact = availableHeight < 400.dp
@@ -186,9 +188,23 @@ internal fun OverlayRoot(
                                         )
                                     }
                                 }
+                                val volumeLabel = stringResource(R.string.overlay_clip_volume, clipVolume.roundToInt())
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(volumeLabel, style = MaterialTheme.typography.labelMedium)
+                                    Slider(
+                                        value = clipVolume,
+                                        onValueChange = { clipVolume = it },
+                                        valueRange = 10f..100f,
+                                        steps = 8,
+                                        enabled = playback == SoundboardState.Idle,
+                                        modifier = Modifier.weight(1f).padding(start = 8.dp)
+                                            .semantics { contentDescription = volumeLabel },
+                                    )
+                                }
                                 LazyColumn(Modifier.heightIn(max = 220.dp)) {
                                     items(sorted, key = { it.id }) { sound ->
-                                        SoundRow(sound, engineOn && !engineBusy, playback, onPlay, onStop)
+                                        SoundRow(sound, engineOn && !engineBusy, playback,
+                                            { id -> onPlay(id, clipVolume.roundToInt()) }, onStop)
                                     }
                                 }
                             }

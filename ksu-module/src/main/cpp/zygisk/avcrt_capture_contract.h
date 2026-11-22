@@ -6,7 +6,7 @@
 
 namespace avcrt::capture_contract {
 
-enum class Sample { Unsupported, S16, Float };
+enum class Sample { Unsupported, S16, Float, Packed24 };
 
 // AOSP audio_format_t. Four bytes per sample do not establish float PCM.
 constexpr Sample audio_record_sample(int32_t format) {
@@ -17,10 +17,15 @@ constexpr Sample audio_record_sample(int32_t format) {
     }
 }
 
+constexpr Sample hal_sample(int32_t format) {
+    return format == 0x6 ? Sample::Packed24 : audio_record_sample(format);
+}
+
 constexpr size_t sample_bytes(Sample sample) {
     switch (sample) {
         case Sample::S16: return sizeof(int16_t);
         case Sample::Float: return sizeof(float);
+        case Sample::Packed24: return 3; // AUDIO_FORMAT_PCM_24_BIT_PACKED (0x6)
         default: return 0;
     }
 }
@@ -42,7 +47,8 @@ inline PcmSpan pcm_span(const void* data, size_t frames, int64_t rate, int64_t c
     const auto addr = reinterpret_cast<uintptr_t>(data);
     const auto ch = static_cast<size_t>(channels);
     const size_t frame_bytes = bps * ch;
-    if (addr % bps || frames > std::numeric_limits<unsigned int>::max() / ch ||
+    if ((sample != Sample::Packed24 && addr % bps) ||
+        frames > std::numeric_limits<unsigned int>::max() / ch ||
         frames > (std::numeric_limits<uintptr_t>::max() - addr) / frame_bytes) return {};
     return {frames * frame_bytes, frame_bytes};
 }

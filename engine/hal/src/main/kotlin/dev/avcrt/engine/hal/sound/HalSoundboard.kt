@@ -62,7 +62,7 @@ class HalSoundboard @Inject constructor(
         }
     }
 
-    override suspend fun play(id: String): AvcrtResult<Unit> {
+    override suspend fun play(id: String, clipVolumePercent: Int): AvcrtResult<Unit> {
         val token = mutex.withLock {
             if (!isEngineRunning()) return failure(R.string.error_sound_engine_off)
             expiration?.cancel()
@@ -78,7 +78,7 @@ class HalSoundboard @Inject constructor(
                 if (!hasSoundboardModule()) return@withContext failure(R.string.error_sound_module)
                 val sound = library.observe(MediaFolder.SOUNDS).first().firstOrNull { it.id == id }
                     ?: return@withContext failure(R.string.error_sound_decode)
-                val pcm = SoundDecoder.decode(sound.absolutePath)
+                val pcm = SoundDecoder.decode(sound.absolutePath, clipVolumePercent.coerceIn(0, 100) / 100f)
                 val staging = File.createTempFile("avcrt-sound-", ".pcm", context.cacheDir)
                 try {
                     mutex.withLock {

@@ -155,12 +155,9 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     target_link_options(zygisk_avcrt PRIVATE -static-libstdc++)
 
     # ---------------------------------------------------------------
-    # libavcrt_afhook.so — the UNIVERSAL AudioFlinger-level voice hook.
-    # ptrace-injected (by avcrtd, via avcrt_inject) into the audioserver process, where it
-    # inline-hooks android::AudioStreamIn::read in libaudioflinger_datapath — the one chokepoint
-    # every mic capture passes through at the HAL read (apps + mediaserver + camera). Pitches the
-    # buffer in place via the shared avcrt::Engine. Reuses the same self-checking inline hooker as
-    # the Zygisk module. Staged to system/lib64 (the audioserver namespace only loads from there).
+    # libavcrt_afhook.so — shared AudioFlinger capture backend. avcrtd loads it into
+    # audioserver, where it resolves AudioStreamIn::read at runtime and processes supported
+    # PCM through the shared engine. Capture paths that bypass this entry are not covered.
     # ---------------------------------------------------------------
     add_library(avcrt_afhook SHARED
             afhook/avcrt_afhook.cpp
@@ -170,7 +167,7 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     target_include_directories(avcrt_afhook PRIVATE src zygisk afhook)
     target_link_libraries(avcrt_afhook PRIVATE log SoundTouch)
     target_compile_options(avcrt_afhook PRIVATE
-            -Wall -Wextra -Wno-unused-parameter -O2 -fPIC -fvisibility=hidden
+            -Wall -Wextra -Wno-unused-parameter -O2 -fPIC -fvisibility=hidden -mbranch-protection=bti
     )
     # nodelete: the hook + its trampolines live in this .so for the audioserver lifetime.
     target_link_options(avcrt_afhook PRIVATE -static-libstdc++ -Wl,-z,nodelete)

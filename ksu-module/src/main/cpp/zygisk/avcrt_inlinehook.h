@@ -13,9 +13,9 @@
 //     verified case);
 //   • BTI landing pad first (bti c/j/jc) → PRESERVE it (20-byte patch) so indirect callers don't
 //     fault on BTI-enforced builds;
-//   • PAC (paciasp/pacibsp) entry, or any PC-relative instruction in the copy region (ADR/ADRP/
-//     B/BL/B.cond/CB*/TB*/LDR-literal) → SKIP (return nullptr) — we can't copy those verbatim, and
-//     skipping is safe (voice just isn't changed in that app) vs. crashing the process.
+//   • PAC (paciasp/pacibsp) entry → opt-in single-instruction hook after the signing instruction;
+//     the bridge authenticates before entering the replacement, and the original signs again.
+//   • Unsupported prologues or PC-relative copies are skipped.
 //
 // Mechanism (classic absolute-jump inline hook), lead = 0 (normal) or 4 (preserved BTI pad):
 //   target:  overwrite [0, lead+16) with  [orig pad?] LDR x16,#8 ; BR x16 ; .quad replacement
@@ -29,7 +29,9 @@
 #include <sys/types.h>   // off64_t
 #include <unistd.h>      // pwrite64, getpagesize
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <initializer_list>
 
 namespace avcrt {
 
@@ -53,7 +55,6 @@ inline bool insn_is_pc_relative(uint32_t i) {
 inline bool insn_is_bti(uint32_t i) {
     return i == 0xD503245Fu /*bti c*/ || i == 0xD503243Fu /*bti j*/ || i == 0xD503247Fu /*bti jc*/;
 }
-// PAC sign-LR entries — copying them verbatim would re-sign LR with the wrong SP context → skip.
 inline bool insn_is_pac_entry(uint32_t i) {
     return i == 0xD503233Fu /*paciasp*/ || i == 0xD503237Fu /*pacibsp*/;
 }
@@ -67,6 +68,112 @@ inline void avcrt_make_abs_jump(void* out, void* dest) {
     memcpy(buf + 8, &d, 8);
     memcpy(out, buf, kJumpLen);
 }
+
+#if defined(__aarch64__)
+inline uint32_t avcrt_direct_branch(uintptr_t from, uintptr_t to) {
+    constexpr uintptr_t reach = 1u << 27; // A64 B: signed imm26 in instruction words.
+    if ((from | to) & 3u) return 0;
+    if (to >= from ? to - from >= reach : from - to > reach) return 0;
+    return 0x14000000u | (static_cast<uint32_t>((to - from) >> 2) & 0x03ffffffu);
+}
+
+inline bool avcrt_pac_stack_setup(uint32_t word) {
+    return (word & 0xff8003ffu) == 0xd10003ffu || // sub sp, sp, #imm
+           (word & 0xffc07fffu) == 0xa9807bfdu;   // stp x29, x30, [sp, #imm]!
+}
+
+// Keep the loader's BTI state when changing permissions on the code page.
+inline int avcrt_read_exec_prot(uintptr_t pc) {
+    FILE* file = std::fopen("/proc/self/smaps", "re");
+    if (!file) return 0;
+    char line[512];
+    bool found = false;
+    int prot = 0;
+    while (std::fgets(line, sizeof(line), file)) {
+        unsigned long begin, end;
+        char mode[5];
+        if (std::sscanf(line, "%lx-%lx %4s", &begin, &end, mode) == 3) {
+            if (found) break;
+            found = pc >= begin && pc < end;
+            if (found && std::strcmp(mode, "r-xp") != 0) break;
+        } else if (found && std::strncmp(line, "VmFlags:", 8) == 0) {
+            prot = PROT_READ | PROT_EXEC;
+            char* state = nullptr;
+            for (const char* flag = strtok_r(line + 8, " \t\n", &state); flag;
+                 flag = strtok_r(nullptr, " \t\n", &state)) {
+                if (std::strcmp(flag, "bt") == 0) prot |= PROT_BTI;
+            }
+            break;
+        }
+    }
+    std::fclose(file);
+    return prot;
+}
+
+inline void* avcrt_pac_hook(const uint32_t* pac, void* replacement, int* reason,
+                            const char** detail, void (*publish_original)(void*)) {
+    auto fail = [&](int r, const char* why) -> void* {
+        if (reason) *reason = r;
+        if (detail) *detail = why;
+        return nullptr;
+    };
+    const auto saved = pac[1];
+    if (!avcrt_pac_stack_setup(saved)) return fail(HOOK_UNSAFE_PROLOGUE, "unsupported PAC frame setup");
+    auto* slot = const_cast<uint32_t*>(pac + 1);
+    const auto pc = reinterpret_cast<uintptr_t>(slot);
+    const int prot = avcrt_read_exec_prot(pc);
+    if (!prot) return fail(HOOK_WRITE_FAILED, "PAC code page protections unknown");
+    const auto page_size = static_cast<uintptr_t>(getpagesize());
+    const auto page = pc & ~(page_size - 1);
+
+    // No fixed mappings. Use hints within B reach and verify the actual addresses.
+    void* mem = MAP_FAILED;
+    uint32_t redirect = 0, resume = 0;
+    for (uintptr_t step = 0; step < (1u << 27); step += (1u << 21)) {
+        for (bool above : {true, false}) {
+            if ((!above && step == 0) || (!above && page <= step)) continue;
+            const auto hint = above ? page + step : page - step;
+            mem = mmap(reinterpret_cast<void*>(hint), page_size, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            if (mem == MAP_FAILED) continue;
+            const auto addr = reinterpret_cast<uintptr_t>(mem);
+            redirect = avcrt_direct_branch(pc, addr + 16);
+            resume = avcrt_direct_branch(addr + 12, pc + 4);
+            if (redirect && resume) break;
+            munmap(mem, page_size);
+            mem = MAP_FAILED;
+        }
+        if (mem != MAP_FAILED) break;
+    }
+    if (mem == MAP_FAILED) return fail(HOOK_NOMEM, "no PAC trampoline within branch reach");
+
+    const uint32_t code[] = {0xd503245fu /* bti c */, pac[0], saved, resume,
+                            pac[0] == 0xd503233fu ? 0xd50323bfu : 0xd50323ffu /* autiasp/autibsp */,
+                            0xd503201fu /* nop; align the jump's address literal */};
+    memcpy(mem, code, sizeof(code));
+    avcrt_make_abs_jump(static_cast<uint8_t*>(mem) + sizeof(code), replacement);
+    if (mprotect(mem, page_size, prot) != 0) {
+        munmap(mem, page_size);
+        return fail(HOOK_NOMEM, "PAC trampoline not executable");
+    }
+    __builtin___clear_cache(static_cast<char*>(mem), static_cast<char*>(mem) + sizeof(code) + kJumpLen);
+
+    auto* code_page = reinterpret_cast<void*>(page);
+    if (mprotect(code_page, page_size, prot | PROT_WRITE) != 0) {
+        munmap(mem, page_size);
+        return fail(HOOK_WRITE_FAILED, "PAC code page not writable");
+    }
+    if (publish_original) publish_original(mem);
+    // A running caller sees either the original frame setup or the branch.
+    // Never overwrite live instructions with a multiword PAC patch.
+    __atomic_store_n(slot, redirect, __ATOMIC_RELEASE);
+    __builtin___clear_cache(reinterpret_cast<char*>(slot), reinterpret_cast<char*>(slot + 1));
+    const bool restored = mprotect(code_page, page_size, prot) == 0;
+    if (reason) *reason = HOOK_OK;
+    if (detail) *detail = restored ? "PAC entry bridge" : "PAC entry bridge (code page RX restore failed)";
+    return mem;
+}
+#endif
 
 // Write `len` bytes to executable code at `addr`. Tries mprotect(RWX)+memcpy; falls back to
 // /proc/self/mem pwrite64 (kernel force-write through a RO mapping — the debugger mechanism),
@@ -102,21 +209,24 @@ inline bool avcrt_write_code(void* addr, const void* data, size_t len) {
 // code write failed. `*reason` (optional) explains a nullptr.
 inline void* avcrt_inline_hook(void* target, void* replacement, int* reason = nullptr,
                                const char** detail = nullptr,
-                               void (*publish_original)(void*) = nullptr) {
+                               void (*publish_original)(void*) = nullptr,
+                               bool allow_pac = false) {
     auto set_reason = [&](int r) { if (reason) *reason = r; };
     if (detail) *detail = nullptr;
 
     const uint32_t* code = static_cast<const uint32_t*>(target);
     uint32_t i0 = code[0];
 
-    // Decide the lead-in: preserve a BTI landing pad; bail on PAC; nothing for a plain prologue.
-    size_t lead = 0;
-    if (insn_is_bti(i0)) {
-        lead = 4;
-    } else if (insn_is_pac_entry(i0)) {
+    const size_t lead = insn_is_bti(i0) ? 4 : 0;
+    if (insn_is_pac_entry(code[lead / 4])) {
+#if defined(__aarch64__)
+        if (allow_pac) return avcrt_pac_hook(code + lead / 4, replacement, reason, detail, publish_original);
+#else
+        (void)allow_pac;
+#endif
         set_reason(HOOK_UNSAFE_PROLOGUE);
         if (detail) *detail = "PAC entry";
-        return nullptr;  // PAC entry — can't safely replicate the sign-LR context
+        return nullptr;
     }
 
     // The 16-byte jump overwrites 4 instructions after the lead-in; all must be copy-safe.
