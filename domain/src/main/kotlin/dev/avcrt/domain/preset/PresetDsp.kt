@@ -22,6 +22,8 @@ data class PresetDsp(
     val crispness: Int = 5,
     val preserveFormants: Boolean = true,
     val fx: PresetEffects = PresetEffects(),
+    /** Keep the live engine and soundboard active without applying any voice DSP. */
+    val bypassVoice: Boolean = false,
 )
 
 // ---- Phase 6 effect chain (Tier-1). Each block has an `enabled` flag (default false = bypass). ----
@@ -313,5 +315,48 @@ object PresetDspValidator {
             dsp.formantSemitones in PresetDspRange.FORMANT_MIN..PresetDspRange.FORMANT_MAX &&
             dsp.timeRatio in PresetDspRange.TIME_RATIO_MIN..PresetDspRange.TIME_RATIO_MAX &&
             dsp.gainDb in PresetDspRange.GAIN_DB_MIN..PresetDspRange.GAIN_DB_MAX &&
-            dsp.crispness in PresetDspRange.CRISPNESS_MIN..PresetDspRange.CRISPNESS_MAX
+            dsp.crispness in PresetDspRange.CRISPNESS_MIN..PresetDspRange.CRISPNESS_MAX &&
+            validEffects(dsp.fx)
+
+    // The editor converts Float slider values to Double, so compare with the same
+    // representable endpoints (e.g. 0.95f.toDouble() is not exactly 0.95).
+    private fun Double.inSlider(min: Double, max: Double): Boolean =
+        this >= min.toFloat().toDouble() && this <= max.toFloat().toDouble()
+
+    private fun validEffects(fx: PresetEffects): Boolean = with(EffectRange) {
+        val unit = 0.0..1.0
+        fx.gate.thresholdDb.inSlider(GATE_THRESH_MIN, GATE_THRESH_MAX) &&
+            fx.gate.attackMs.inSlider(GATE_ATTACK_MIN, GATE_ATTACK_MAX) &&
+            fx.gate.releaseMs.inSlider(GATE_RELEASE_MIN, GATE_RELEASE_MAX) &&
+            fx.eq.lowDb.inSlider(EQ_DB_MIN, EQ_DB_MAX) && fx.eq.midDb.inSlider(EQ_DB_MIN, EQ_DB_MAX) &&
+            fx.eq.highDb.inSlider(EQ_DB_MIN, EQ_DB_MAX) &&
+            fx.ringmod.carrierHz.inSlider(RING_CARRIER_MIN, RING_CARRIER_MAX) && fx.ringmod.mix in unit &&
+            fx.tremolo.rateHz.inSlider(TREM_RATE_MIN, TREM_RATE_MAX) && fx.tremolo.depth in unit && fx.tremolo.shape in 0..2 &&
+            fx.distortion.drive.inSlider(DIST_DRIVE_MIN, DIST_DRIVE_MAX) && fx.distortion.mix in unit &&
+            fx.echo.timeMs.inSlider(ECHO_TIME_MIN, ECHO_TIME_MAX) && fx.echo.feedback.inSlider(ECHO_FB_MIN, ECHO_FB_MAX) &&
+            fx.echo.mix in unit && fx.reverb.roomSize in unit && fx.reverb.damping in unit && fx.reverb.wet in unit && fx.reverb.width in unit &&
+            fx.filter.hpHz.inSlider(FILTER_HP_MIN, FILTER_HP_MAX) && fx.filter.lpHz.inSlider(FILTER_LP_MIN, FILTER_LP_MAX) &&
+            fx.filter.q.inSlider(FILTER_Q_MIN, FILTER_Q_MAX) &&
+            fx.vibrato.rateHz.inSlider(VIB_RATE_MIN, VIB_RATE_MAX) && fx.vibrato.depth in unit &&
+            fx.chorus.rateHz.inSlider(CHOR_RATE_MIN, CHOR_RATE_MAX) && fx.chorus.depth in unit && fx.chorus.mix in unit &&
+            fx.flanger.rateHz.inSlider(FLAN_RATE_MIN, FLAN_RATE_MAX) && fx.flanger.depth in unit &&
+            fx.flanger.feedback.inSlider(FLAN_FB_MIN, FLAN_FB_MAX) && fx.flanger.mix in unit &&
+            fx.phaser.rateHz.inSlider(PHAS_RATE_MIN, PHAS_RATE_MAX) && fx.phaser.depth in unit &&
+            fx.phaser.feedback.inSlider(PHAS_FB_MIN, PHAS_FB_MAX) && fx.phaser.mix in unit &&
+            fx.autowah.sensitivity in unit && fx.autowah.baseHz.inSlider(WAH_BASE_MIN, WAH_BASE_MAX) &&
+            fx.autowah.rangeHz.inSlider(WAH_RANGE_MIN, WAH_RANGE_MAX) && fx.autowah.mix in unit &&
+            fx.bitcrush.bits.inSlider(CRUSH_BITS_MIN, CRUSH_BITS_MAX) &&
+            fx.bitcrush.downsample.inSlider(CRUSH_DS_MIN, CRUSH_DS_MAX) && fx.bitcrush.mix in unit &&
+            fx.compressor.thresholdDb.inSlider(COMP_THRESH_MIN, COMP_THRESH_MAX) &&
+            fx.compressor.ratio.inSlider(COMP_RATIO_MIN, COMP_RATIO_MAX) &&
+            fx.compressor.attackMs.inSlider(COMP_ATTACK_MIN, COMP_ATTACK_MAX) &&
+            fx.compressor.releaseMs.inSlider(COMP_RELEASE_MIN, COMP_RELEASE_MAX) &&
+            fx.compressor.makeupDb.inSlider(COMP_MAKEUP_MIN, COMP_MAKEUP_MAX) &&
+            fx.formant.shift.inSlider(FORMANT_SHIFT_MIN, FORMANT_SHIFT_MAX) &&
+            fx.vocoder.carrierHz.inSlider(VOCODER_CARRIER_MIN, VOCODER_CARRIER_MAX) && fx.vocoder.carrierType in 0..2 &&
+            fx.vocoder.mix in unit && fx.whisper.mix in unit && fx.spectral.blurAmt in unit && fx.spectral.mix in unit &&
+            fx.autotune.strength in unit && fx.harmonizer.mix in unit &&
+            fx.harmonizer.interval1 in HARMON_INTERVAL_MIN.toInt()..HARMON_INTERVAL_MAX.toInt() &&
+            fx.harmonizer.interval2 in HARMON_INTERVAL_MIN.toInt()..HARMON_INTERVAL_MAX.toInt()
+    }
 }

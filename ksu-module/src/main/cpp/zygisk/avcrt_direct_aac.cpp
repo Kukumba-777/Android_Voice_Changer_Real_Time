@@ -238,7 +238,7 @@ struct Transcode {
                         engine.reset(); // Don't turn silence into buffered speech or an effect tail.
                     } else {
                         if (!engine || cfg.revision != revision) {
-                            engine = std::make_unique<Engine>(rate, channels);
+                            engine = std::make_unique<Engine>(rate, channels, /*soundboard=*/true);
                             engine->update(cfg);
                             revision = cfg.revision;
                         }

@@ -84,6 +84,22 @@ class SettingsRepositoryImpl @Inject constructor(
         prefs[KEY_FLOATING_WINDOW] = enabled
     }
 
+    internal fun readSettings(prefs: Preferences): AppSettings = prefs.toAppSettings()
+
+    // Restore UI preferences, not engine state, permissions or startup actions.
+    internal fun restorePreferences(
+        prefs: MutablePreferences,
+        themeMode: ThemeMode,
+        useDynamicColor: Boolean,
+        locale: AppLocale,
+        experimentalEnabled: Boolean,
+    ) {
+        prefs[KEY_THEME_MODE] = themeMode.name
+        prefs[KEY_USE_DYNAMIC_COLOR] = useDynamicColor
+        prefs[KEY_LOCALE] = locale.name
+        prefs[KEY_EXPERIMENTAL] = experimentalEnabled
+    }
+
     private fun Preferences.toAppSettings(): AppSettings = AppSettings(
         themeMode = this[KEY_THEME_MODE]?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() }
             ?: ThemeMode.SYSTEM,

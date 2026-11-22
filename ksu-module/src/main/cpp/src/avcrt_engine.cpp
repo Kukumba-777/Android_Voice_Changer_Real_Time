@@ -15,9 +15,10 @@ constexpr float  kInt16Scale = 32767.0f;
 constexpr size_t kInitialScratchFrames = 4096;
 }  // namespace
 
-Engine::Engine(uint32_t sample_rate, uint32_t channels)
+Engine::Engine(uint32_t sample_rate, uint32_t channels, bool soundboard)
     : sample_rate_(sample_rate),
       channels_(channels),
+      sound_source_(soundboard ? soundboard::Source::instance() : nullptr),
       st_(std::make_unique<soundtouch::SoundTouch>()) {
 
     scratch_in_.reserve(kInitialScratchFrames * channels);
@@ -88,6 +89,10 @@ void Engine::rebuild() {
 bool Engine::process(int16_t* samples, size_t frames) {
     if (!active_cfg_.enabled || !st_) return false;
     if (frames == 0) return true;
+    if (voiceBypassed()) {
+        mixSound(samples, frames);
+        return true;
+    }
 
     const size_t total = frames * channels_;
 
@@ -141,7 +146,45 @@ bool Engine::process(int16_t* samples, size_t frames) {
         else if (v < -0.95f) v = -0.95f + 0.05f * std::tanh((v + 0.95f) * 20.0f);
         samples[i] = static_cast<int16_t>(v * kInt16Scale);
     }
+    mixSound(samples, frames);
     return true;
+}
+
+void Engine::mixSound(int16_t* samples, size_t frames) {
+    if (!sound_source_) return;
+    sound_source_->render(sound_cursor_, frames, sample_rate_, [&](size_t i, float value) {
+        const int clip = static_cast<int>(std::lround(value));
+        for (size_t ch = 0; ch < channels_; ++ch) {
+            auto& sample = samples[i * channels_ + ch];
+            sample = static_cast<int16_t>(std::clamp(static_cast<int>(sample) + clip, -32768, 32767));
+        }
+    });
+}
+
+void Engine::mixSound(float* samples, size_t frames) {
+    if (!sound_source_ || !active_cfg_.enabled) return;
+    sound_source_->render(sound_cursor_, frames, sample_rate_, [&](size_t i, float value) {
+        for (size_t ch = 0; ch < channels_; ++ch) {
+            auto& sample = samples[i * channels_ + ch];
+            sample = std::clamp(sample + value / 32768.f, -1.f, 1.f);
+        }
+    });
+}
+
+void Engine::mixSoundPacked24(uint8_t* samples, size_t frames) {
+    if (!sound_source_ || !active_cfg_.enabled) return;
+    sound_source_->render(sound_cursor_, frames, sample_rate_, [&](size_t i, float value) {
+        const int clip = static_cast<int>(std::lround(value * 256.f));
+        for (size_t ch = 0; ch < channels_; ++ch) {
+            uint8_t* s = samples + 3 * (i * channels_ + ch);
+            const int32_t input = static_cast<int32_t>(s[0]) + (static_cast<int32_t>(s[1]) << 8) +
+                                  (static_cast<int32_t>(s[2] ^ 128) << 16) - 8388608;
+            const uint32_t mixed = static_cast<uint32_t>(std::clamp(input + clip, -8388608, 8388607));
+            s[0] = static_cast<uint8_t>(mixed);
+            s[1] = static_cast<uint8_t>(mixed >> 8);
+            s[2] = static_cast<uint8_t>(mixed >> 16);
+        }
+    });
 }
 
 }  // namespace avcrt

@@ -6,6 +6,7 @@
 
 #include "avcrt_config.h"
 #include "avcrt_effects.h"
+#include "avcrt_soundboard.h"
 
 namespace soundtouch {
 class SoundTouch;
@@ -30,7 +31,7 @@ namespace avcrt {
  */
 class Engine {
 public:
-    Engine(uint32_t sample_rate, uint32_t channels);
+    Engine(uint32_t sample_rate, uint32_t channels, bool soundboard = false);
     ~Engine();
 
     /** Re-applies cfg to the underlying SoundTouch if it changed since the
@@ -41,13 +42,20 @@ public:
      *  is disabled / unconfigured (caller should pass through). */
     bool process(int16_t* samples, size_t frames);
 
+    bool voiceBypassed() const { return active_cfg_.bypass_voice; }
+    void mixSound(float* samples, size_t frames);
+    void mixSoundPacked24(uint8_t* samples, size_t frames);
+
 private:
     void rebuild();
+    void mixSound(int16_t* samples, size_t frames);
 
     uint32_t  sample_rate_;
     uint32_t  channels_;
     DspConfig active_cfg_;
     int64_t   applied_revision_{-1};
+    soundboard::Source* sound_source_;
+    soundboard::Cursor sound_cursor_;
 
     std::unique_ptr<soundtouch::SoundTouch> st_;
 

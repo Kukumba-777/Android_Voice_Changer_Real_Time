@@ -42,6 +42,15 @@ object AvcrtPaths {
     /** System property the native side watches to reload its config. */
     const val RELOAD_PROPERTY = "avcrt.config.revision"
 
+    /** Transient, read-only to capture clients. See post-fs-data.sh and avcrt_paths.h. */
+    const val SOUNDBOARD_DIR = "/dev/avcrt_sound"
+    const val SOUNDBOARD_CLIP = "$SOUNDBOARD_DIR/clip.pcm"
+    const val SOUNDBOARD_CONTEXT = "u:object_r:avcrt_sound_file:s0"
+
+    /** App-private media directories. Keeping them here avoids feature-specific path literals. */
+    const val APP_MODELS_DIR = "models"
+    const val APP_SOUNDS_DIR = "sounds"
+
     /**
      * Live DSP config mirrored to system properties. App processes cannot read the
      * preset JSON (SELinux), so the Zygisk app-capture hook reads these instead;
@@ -49,6 +58,7 @@ object AvcrtPaths {
      * Zygisk module (zygisk_avcrt.cpp).
      */
     const val PROP_ENABLED = "avcrt.dsp.enabled"
+    const val PROP_BYPASS_VOICE = "avcrt.dsp.bypass_voice"
     const val PROP_PITCH = "avcrt.dsp.pitch"
     const val PROP_FORMANT = "avcrt.dsp.formant"
     const val PROP_GAIN = "avcrt.dsp.gain"

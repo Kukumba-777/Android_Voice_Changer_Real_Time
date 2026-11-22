@@ -9,12 +9,15 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dev.avcrt.feature.converter.converterGraph
+import dev.avcrt.feature.files.filesGraph
 import dev.avcrt.feature.home.homeGraph
 import dev.avcrt.feature.logs.logsGraph
 import dev.avcrt.feature.presets.presetsGraph
@@ -29,19 +32,23 @@ fun AvcrtRootScreen() {
             val backStackEntry by navController.currentBackStackEntryAsState()
             val currentRoute = backStackEntry?.destination?.route
             val currentTop = TopDestination.fromRoute(currentRoute)
+            val compact = LocalConfiguration.current.screenWidthDp < 420
 
             NavigationBar {
                 TopDestination.entries.forEach { destination ->
                     val selected = destination == currentTop
                     NavigationBarItem(
                         selected = selected,
+                        alwaysShowLabel = !compact,
                         icon = {
                             Icon(
                                 imageVector = if (selected) destination.selectedIcon else destination.unselectedIcon,
-                                contentDescription = null,
+                                contentDescription = if (selected || !compact) null else stringResource(destination.labelRes),
                             )
                         },
-                        label = { Text(stringResource(destination.labelRes)) },
+                        label = {
+                            Text(stringResource(destination.labelRes), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        },
                         onClick = {
                             navController.navigate(destination.route) {
                                 popUpTo(navController.graph.findStartDestination().id) {
@@ -66,8 +73,9 @@ fun AvcrtRootScreen() {
             homeGraph(navController)
             presetsGraph(navController)
             converterGraph(navController)
-            logsGraph(navController)
+            filesGraph()
             settingsGraph(navController)
+            logsGraph(navController)
         }
     }
 }

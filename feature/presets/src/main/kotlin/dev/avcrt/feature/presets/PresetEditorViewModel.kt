@@ -39,6 +39,7 @@ data class PresetEditorUiState(
     val gainDb: Float = 0f,
     val crispness: Int = 5,
     val preserveFormants: Boolean = true,
+    val bypassVoice: Boolean = false,
     val effects: PresetEffects = PresetEffects(),
     /** When true (Settings → Experimental), the editor reveals the experimental effect cards. */
     val experimentalUnlocked: Boolean = false,
@@ -143,6 +144,7 @@ class PresetEditorViewModel @Inject constructor(
                         gainDb = existing.dsp.gainDb.toFloat(),
                         crispness = existing.dsp.crispness,
                         preserveFormants = existing.dsp.preserveFormants,
+                        bypassVoice = existing.dsp.bypassVoice,
                         effects = existing.dsp.fx,
                     )
                 }
@@ -157,6 +159,7 @@ class PresetEditorViewModel @Inject constructor(
     fun onGain(value: Float) = _state.update { it.copy(gainDb = value) }
     fun onCrispness(value: Int) = _state.update { it.copy(crispness = value) }
     fun onPreserveFormants(value: Boolean) = _state.update { it.copy(preserveFormants = value) }
+    fun onBypassVoice(value: Boolean) = _state.update { it.copy(bypassVoice = value) }
     fun onApplyAfterSave(value: Boolean) = _state.update { it.copy(applyAfterSave = value) }
 
     /** Immutable update of the effect chain, e.g. updateEffects { it.copy(reverb = it.reverb.copy(...)) }. */
@@ -164,7 +167,7 @@ class PresetEditorViewModel @Inject constructor(
         _state.update { it.copy(effects = transform(it.effects)) }
 
     fun onReset() = _state.update {
-        it.copy(pitch = 0f, formant = 0f, gainDb = 0f, crispness = 5, preserveFormants = true, effects = PresetEffects())
+        it.copy(pitch = 0f, formant = 0f, gainDb = 0f, crispness = 5, preserveFormants = true, effects = PresetEffects(), bypassVoice = false)
     }
 
     fun onSave() {
@@ -192,6 +195,7 @@ class PresetEditorViewModel @Inject constructor(
                 crispness = s.crispness,
                 preserveFormants = s.preserveFormants,
                 fx = s.effects,
+                bypassVoice = s.bypassVoice,
             ),
             tags = baseTags.ifEmpty { listOf(CUSTOM_TAG) },
         )
@@ -323,6 +327,7 @@ class PresetEditorViewModel @Inject constructor(
                 crispness = s.crispness,
                 preserveFormants = s.preserveFormants,
                 fx = s.effects,
+                bypassVoice = s.bypassVoice,
             ),
             tags = baseTags,
         )

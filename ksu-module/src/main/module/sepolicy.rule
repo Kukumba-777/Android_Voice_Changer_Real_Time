@@ -17,3 +17,8 @@ allow { audioserver appdomain } init_svc_debug_prop file { getattr open read map
 
 # avcrtd (u:r:magisk:s0) ptrace-attaches to audioserver to remote-dlopen the hook .so.
 allow magisk audioserver process ptrace
+
+# Read-only soundboard transport, not access to other shell/root data under /data.
+type avcrt_sound_file file_type
+allow { appdomain audioserver } avcrt_sound_file dir { getattr search }
+allow { appdomain audioserver } avcrt_sound_file file { getattr open read }

@@ -89,6 +89,7 @@ class BuiltInPresetsLoader @Inject constructor(
         // Phase-6 effect chain. PresetEffects' field names == the JSON keys (dsp.fx.<effect>.<field>),
         // every field defaulted, so presets without `fx` (and the legacy ones) deserialize unchanged.
         val fx: PresetEffects = PresetEffects(),
+        val bypassVoice: Boolean = false,
     ) {
         fun toDomain(): PresetDsp = PresetDsp(
             pitchSemitones = pitchSemitones,
@@ -98,6 +99,7 @@ class BuiltInPresetsLoader @Inject constructor(
             crispness = crispness,
             preserveFormants = preserveFormants,
             fx = fx,
+            bypassVoice = bypassVoice,
         )
     }
 

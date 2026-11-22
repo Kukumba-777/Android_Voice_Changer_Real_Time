@@ -1,0 +1,23 @@
+<resources>
+    <string name="files_title">Files</string>
+    <string name="files_models">AI models</string>
+    <string name="files_sounds">Sounds</string>
+    <string name="files_models_hint">Import ONNX models for the AI converter. Keep the names contentvec.onnx and rmvpe.onnx for the shared models.</string>
+    <string name="files_sounds_hint">Import audio clips up to %1$d seconds. Play them from the floating window while AVCRT is on.</string>
+    <string name="files_import">Import files</string>
+    <string name="files_imported">Imported %1$d of %2$d files.</string>
+    <string name="files_open_failed">Could not open the selected file.</string>
+    <string name="files_empty">No files in this folder yet.</string>
+    <string name="files_deleted">File removed.</string>
+    <string name="files_delete">Delete</string>
+    <string name="files_delete_title">Delete this file?</string>
+    <string name="files_backup">Backup</string>
+    <string name="files_backup_export">Export backup</string>
+    <string name="files_backup_restore">Restore backup</string>
+    <string name="files_backup_choose">Choose ZIP</string>
+    <string name="files_backup_restore_hint">Adds missing custom presets, sounds and ONNX models without replacing existing ones. Applies the saved language, appearance and experimental-effects preferences. Does not enable the engine or change the active preset.</string>
+    <string name="files_backup_saved">Backup saved.</string>
+    <string name="files_backup_restored">Backup restored. Existing presets and files were kept.</string>
+    <string name="files_backup_export_failed">Could not save the backup. Check free space and file sizes.</string>
+    <string name="files_backup_restore_failed">Could not restore the backup. Check the ZIP and available storage.</string>
+</resources>

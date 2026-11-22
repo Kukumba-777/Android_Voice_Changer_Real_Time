@@ -23,6 +23,24 @@
       }
     },
     {
+      "id": "builtin.original",
+      "iconKey": "mic",
+      "tags": ["builtin", "passthrough"],
+      "names": {
+        "en": "Original voice",
+        "ru": "Родной голос"
+      },
+      "descriptions": {
+        "en": "No voice effects. You can still play sounds into the microphone stream.",
+        "ru": "Без обработки голоса. Звуки по-прежнему можно проигрывать в поток микрофона."
+      },
+      "dsp": {
+        "pitchSemitones": 0.0,
+        "formantSemitones": 0.0,
+        "bypassVoice": true
+      }
+    },
+    {
       "id": "builtin.male_low",
       "iconKey": "male_low",
       "tags": ["builtin", "male", "low"],

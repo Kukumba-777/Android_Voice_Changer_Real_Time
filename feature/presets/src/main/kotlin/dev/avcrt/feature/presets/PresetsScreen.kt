@@ -206,14 +206,16 @@ private fun PresetCard(
                 horizontalArrangement = Arrangement.spacedBy(AvcrtSpacing.md),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                PresetChip(
-                    label = stringResource(R.string.presets_pitch),
-                    value = formatSemitones(preset.dsp.pitchSemitones),
-                )
-                PresetChip(
-                    label = stringResource(R.string.presets_formant),
-                    value = formatSemitones(preset.dsp.formantSemitones),
-                )
+                if (!preset.dsp.bypassVoice) {
+                    PresetChip(
+                        label = stringResource(R.string.presets_pitch),
+                        value = formatSemitones(preset.dsp.pitchSemitones),
+                    )
+                    PresetChip(
+                        label = stringResource(R.string.presets_formant),
+                        value = formatSemitones(preset.dsp.formantSemitones),
+                    )
+                }
                 Spacer(Modifier.weight(1f))
                 // Fixed-height action slot so the card never reflows as it swaps
                 // Apply ↔ Active ↔ spinner.

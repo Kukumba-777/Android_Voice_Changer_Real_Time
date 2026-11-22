@@ -15,6 +15,14 @@ mkdir -p "$DATA"; chmod 0755 "$DATA"
 [ -f "$DATA/engine_state" ] || { echo off > "$DATA/engine_state"; chmod 0644 "$DATA/engine_state"; }
 rm -f /data/adb/avcrt_install_pending 2>/dev/null
 
+# Transient PCM only. The directory is not writable by capture clients.
+SOUND=/dev/avcrt_sound
+mkdir -p "$SOUND" && chmod 0755 "$SOUND"
+rm -f "$SOUND/clip.pcm"
+if [ -d "$MODDIR/zygisk" ] || [ -f "$MODDIR/bin/avcrt_inject" ]; then
+    chcon u:object_r:avcrt_sound_file:s0 "$SOUND"
+fi
+
 # The AF claim is non-persistent; only an installed hook publishes it.
 
 # Clear only AVCRT's dedicated mute control. Topology is deliberately not restored
@@ -27,6 +35,9 @@ if [ -f "$PRESET" ]; then
     en=$(grep -o '"enabled":[a-z]*' "$PRESET" | head -1 | cut -d: -f2); [ "$en" = true ] && en=1 || en=0
     pf=$(grep -o '"preserveFormants":[a-z]*' "$PRESET" | head -1 | cut -d: -f2); [ "$pf" = false ] && pf=0 || pf=1
     setprop avcrt.dsp.enabled "$en"
+    bypass=$(grep -o '"bypassVoice":[a-z]*' "$PRESET" | head -1 | cut -d: -f2)
+    [ "$bypass" = true ] && bypass=1 || bypass=0
+    setprop avcrt.dsp.bypass_voice "$bypass"
     setprop avcrt.dsp.pitch "$(jget pitchSemitones)"
     setprop avcrt.dsp.formant "$(jget formantSemitones)"
     setprop avcrt.dsp.gain "$(jget gainDb)"

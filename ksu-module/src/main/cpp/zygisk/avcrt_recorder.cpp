@@ -327,7 +327,7 @@ struct Session {
                                           AMEDIACODEC_CONFIGURE_FLAG_ENCODE) != AMEDIA_OK ||
             AMediaCodec_start(codec.get()) != AMEDIA_OK) return false;
         codec_started = true;
-        engine = std::make_unique<Engine>(request.rate, request.channels);
+        engine = std::make_unique<Engine>(request.rate, request.channels, /*soundboard=*/true);
         engine->update(cfg);
         revision = cfg.revision;
         max_bytes.store(request.max_bytes);
@@ -539,7 +539,7 @@ struct Session {
                 DspConfig cfg;
                 if (p > 0 && !have_silent_read && current_config(cfg)) {
                     if (!engine || revision != cfg.revision) {
-                        engine = std::make_unique<Engine>(request.rate, request.channels);
+                        engine = std::make_unique<Engine>(request.rate, request.channels, /*soundboard=*/true);
                         engine->update(cfg);
                         revision = cfg.revision;
                     }

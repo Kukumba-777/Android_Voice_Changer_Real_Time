@@ -3,10 +3,9 @@
     <string name="converter_title">AI Voice</string>
 
     <string name="converter_models_header">Models</string>
-    <string name="converter_models_missing">Missing contentvec.onnx and/or rmvpe.onnx. Put both shared models in the folder below.</string>
+    <string name="converter_models_missing">Import the shared models contentvec.onnx and rmvpe.onnx in Files → AI models.</string>
     <string name="converter_models_missing_short">Shared models (contentvec.onnx, rmvpe.onnx) not found</string>
-    <string name="converter_models_dir">Folder: %1$s</string>
-    <string name="converter_no_voices">No voice models. Drop a voice net_g .onnx into the folder, then Scan.</string>
+    <string name="converter_no_voices">No voice models. Import a voice net_g ONNX model in Files → AI models.</string>
     <string name="converter_scan">Scan folder</string>
 
     <string name="converter_record_header">Your voice</string>

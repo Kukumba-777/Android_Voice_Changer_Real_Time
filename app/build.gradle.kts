@@ -70,6 +70,7 @@ dependencies {
     implementation(project(":feature:converter"))
     implementation(project(":feature:logs"))
     implementation(project(":feature:settings"))
+    implementation(project(":feature:files"))
 
     implementation(project(":engine:api"))
     implementation(project(":engine:hal"))

@@ -120,4 +120,5 @@
     <string name="presets_fx_harmonizer">Harmonizer</string>
     <string name="presets_fx_interval1">Voice 1</string>
     <string name="presets_fx_interval2">Voice 2</string>
+    <string name="presets_bypass_voice">Keep original voice</string>
 </resources>

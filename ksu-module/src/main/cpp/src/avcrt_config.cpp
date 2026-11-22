@@ -75,6 +75,7 @@ DspConfig ConfigStore::parse_file() {
 
         if (json.contains("dsp") && !json["dsp"].is_null()) {
             const auto& d = json["dsp"];
+            cfg.bypass_voice     = d.value("bypassVoice", false);
             cfg.pitch_semitones   = d.value("pitchSemitones",   0.0);
             cfg.formant_semitones = d.value("formantSemitones", 0.0);
             cfg.time_ratio        = d.value("timeRatio",        1.0);

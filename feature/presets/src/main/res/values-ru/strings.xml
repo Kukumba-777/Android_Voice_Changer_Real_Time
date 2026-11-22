@@ -120,4 +120,5 @@
     <string name="presets_fx_harmonizer">Гармонайзер</string>
     <string name="presets_fx_interval1">Голос 1</string>
     <string name="presets_fx_interval2">Голос 2</string>
+    <string name="presets_bypass_voice">Оставить родной голос</string>
 </resources>

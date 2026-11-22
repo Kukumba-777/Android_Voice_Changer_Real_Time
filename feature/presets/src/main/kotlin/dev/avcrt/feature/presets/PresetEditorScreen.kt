@@ -212,6 +212,41 @@ private fun PresetEditorForm(
             padding = PaddingValues(top = AvcrtSpacing.sm, bottom = AvcrtSpacing.xs),
         )
 
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = state.bypassVoice, onCheckedChange = viewModel::onBypassVoice)
+            Text(stringResource(R.string.presets_bypass_voice), style = MaterialTheme.typography.bodyMedium)
+        }
+
+        if (!state.bypassVoice) VoiceEffectsForm(state, viewModel)
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(
+                checked = state.applyAfterSave,
+                onCheckedChange = viewModel::onApplyAfterSave,
+            )
+            Text(
+                text = stringResource(R.string.presets_editor_apply_after),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+
+        TextButton(onClick = viewModel::onReset) {
+            Icon(Icons.Rounded.Restore, contentDescription = null)
+            Spacer(Modifier.width(AvcrtSpacing.sm))
+            Text(stringResource(R.string.presets_editor_reset))
+        }
+
+        if (state.isEditing) {
+            DeleteSection(onConfirmed = viewModel::onDelete)
+        }
+
+        Spacer(Modifier.height(AvcrtSpacing.xxl))
+    }
+}
+
+@Composable
+private fun VoiceEffectsForm(state: PresetEditorUiState, viewModel: PresetEditorViewModel) {
+    Column(verticalArrangement = Arrangement.spacedBy(AvcrtSpacing.md)) {
         DspSlider(
             label = stringResource(R.string.presets_pitch),
             value = state.pitch,
@@ -262,28 +297,6 @@ private fun PresetEditorForm(
             onUpdate = viewModel::updateEffects,
         )
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(
-                checked = state.applyAfterSave,
-                onCheckedChange = viewModel::onApplyAfterSave,
-            )
-            Text(
-                text = stringResource(R.string.presets_editor_apply_after),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-
-        TextButton(onClick = viewModel::onReset) {
-            Icon(Icons.Rounded.Restore, contentDescription = null)
-            Spacer(Modifier.width(AvcrtSpacing.sm))
-            Text(stringResource(R.string.presets_editor_reset))
-        }
-
-        if (state.isEditing) {
-            DeleteSection(onConfirmed = viewModel::onDelete)
-        }
-
-        Spacer(Modifier.height(AvcrtSpacing.xxl))
     }
 }
 

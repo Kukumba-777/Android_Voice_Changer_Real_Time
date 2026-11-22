@@ -44,6 +44,7 @@ struct HarmonizerCfg{ bool enabled=false; int interval1=4; int interval2=7; doub
  */
 struct DspConfig {
     bool   enabled            = false;
+    bool   bypass_voice       = false;
     double pitch_semitones    = 0.0;
     double formant_semitones  = 0.0;
     double time_ratio         = 1.0;

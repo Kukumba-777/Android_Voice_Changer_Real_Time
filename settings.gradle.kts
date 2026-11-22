@@ -39,6 +39,7 @@ include(":feature:presets")
 include(":feature:logs")
 include(":feature:settings")
 include(":feature:converter")
+include(":feature:files")
 
 include(":engine:api")
 include(":engine:hal")

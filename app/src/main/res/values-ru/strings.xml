@@ -8,4 +8,5 @@
     <string name="nav_converter">AI</string>
     <string name="nav_logs">Логи</string>
     <string name="nav_settings">Настройки</string>
+    <string name="nav_files">Файлы</string>
 </resources>

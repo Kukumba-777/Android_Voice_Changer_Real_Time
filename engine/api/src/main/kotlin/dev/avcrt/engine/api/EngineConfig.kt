@@ -33,6 +33,7 @@ data class EngineDspDto(
     // Phase-6 effect chain. PresetEffects' field names == the JSON keys the C++ daemon parses
     // (dsp.fx.gate.thresholdDb, …) so it serializes directly; reused, no duplicate DTO.
     val fx: PresetEffects = PresetEffects(),
+    val bypassVoice: Boolean = false,
 ) {
     companion object {
         fun from(dsp: PresetDsp): EngineDspDto = EngineDspDto(
@@ -43,6 +44,7 @@ data class EngineDspDto(
             crispness = dsp.crispness,
             preserveFormants = dsp.preserveFormants,
             fx = dsp.fx,
+            bypassVoice = dsp.bypassVoice,
         )
     }
 }

@@ -105,11 +105,6 @@ fun ConverterScreen(
                                 color = MaterialTheme.colorScheme.error,
                             )
                         }
-                        Text(
-                            stringResource(R.string.converter_models_dir, state.modelsDir),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
                         if (state.voices.isEmpty()) {
                             Text(stringResource(R.string.converter_no_voices), style = MaterialTheme.typography.bodyMedium)
                         } else {

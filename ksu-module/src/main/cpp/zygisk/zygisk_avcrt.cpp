@@ -45,6 +45,7 @@
 #include "avcrt_inlinehook.h"
 
 #include "avcrt_engine.h"
+#include "avcrt_paths.h"
 #include "avcrt_config.h"   // DspConfig struct
 #include "avcrt_capture_contract.h"
 #include "avcrt_direct_aac.h"
@@ -248,6 +249,7 @@ void refresh_config() {
     wc.preserve_formants = prop_i("avcrt.dsp.preserve_formants", 1);
     wc.crispness = prop_i("avcrt.dsp.crispness", 5);
     parse_fx_props(wc.fx);
+    wc.fx.bypass_voice = prop_i(avcrt::paths::kBypassVoiceProperty, 0) != 0;
     static std::atomic<unsigned> dbg{0};
     if (dbg.load() < 3 && dbg.fetch_add(1) < 3) { LOGI("cfg from props: enabled=%d rev=%d pitch=%.1f formant=%.1f gain=%.1f "
                         "fx[gate=%d eq=%d ring=%d trem=%d dist=%d echo=%d verb=%d]",
@@ -290,7 +292,7 @@ StreamCtx *ctx_for(const void *self, uint32_t rate, uint32_t channels) {
     else                        { c = it->second; }
     if (!c->engine || c->rate != rate || c->channels != channels) {
         delete c->engine;
-        c->engine = new Engine((int)rate, (int)channels);
+        c->engine = new Engine(rate, channels, /*soundboard=*/true);
         c->rate = rate; c->channels = channels; c->applied_rev = -2;
         c->last_raw = 0; c->last_end = 0;
     }
@@ -322,6 +324,8 @@ void process_pcm(StreamCtx *c, void *raw, size_t frames, uint32_t channels, int 
     if (frames == 0) return;
     if (bps == 2) {
         c->engine->process(static_cast<int16_t *>(raw), frames);
+    } else if (c->engine->voiceBypassed()) {
+        c->engine->mixSound(static_cast<float*>(raw), frames);
     } else {  // bps == 4 → float PCM
         size_t n = frames * channels;
         if (c->i16.size() < n) c->i16.resize(n);
@@ -335,6 +339,18 @@ void process_pcm(StreamCtx *c, void *raw, size_t frames, uint32_t channels, int 
         c->engine->process(c->i16.data(), frames);
         for (size_t i = 0; i < n; i++) fb[i] = static_cast<float>(c->i16[i]) * (1.0f / 32768.0f);
     }
+}
+
+void process_packed(StreamCtx* c, uint8_t* packed, size_t frames, uint32_t channels) {
+    if (c->engine->voiceBypassed()) {
+        c->engine->mixSoundPacked24(packed, frames);
+        return;
+    }
+    const size_t count = frames * channels;
+    if (c->i16.size() < count) c->i16.resize(count);
+    for (size_t i = 0; i < count; ++i) c->i16[i] = avcrt::pcm24_to_s16(packed + i * 3);
+    c->engine->process(c->i16.data(), frames);
+    for (size_t i = 0; i < count; ++i) avcrt::s16_to_pcm24(c->i16[i], packed + i * 3);
 }
 
 // ===== Hook 1: android::AudioRecord::obtainBuffer =====
@@ -453,7 +469,7 @@ void process_java(JNIEnv* env, jobject self, size_t samples, int bps, Process pr
     if (!ctx.engine || ctx.rate != static_cast<uint32_t>(rate) ||
         ctx.channels != static_cast<uint32_t>(channels)) {
         delete ctx.engine;
-        ctx.engine = new Engine(rate, channels);
+        ctx.engine = new Engine(rate, channels, /*soundboard=*/true);
         ctx.rate = rate;
         ctx.channels = channels;
         ctx.applied_rev = -2;
@@ -494,15 +510,7 @@ jint hooked_java_read(JNIEnv* env, jobject self, Array array, jint offset, jint 
                     std::vector<jbyte> packed(got);
                     env->GetByteArrayRegion(array, offset, got, packed.data());
                     if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
-                    std::vector<jshort> data(got / 3);
-                    for (size_t i = 0; i < data.size(); ++i) {
-                        data[i] = avcrt::pcm24_to_s16(
-                            reinterpret_cast<const uint8_t*>(packed.data() + i * 3));
-                    }
-                    ctx->engine->process(data.data(), frames);
-                    for (size_t i = 0; i < data.size(); ++i) {
-                        avcrt::s16_to_pcm24(data[i], reinterpret_cast<uint8_t*>(packed.data() + i * 3));
-                    }
+                    process_packed(ctx, reinterpret_cast<uint8_t*>(packed.data()), frames, channels);
                     env->SetByteArrayRegion(array, offset, got, packed.data());
                 } else {
                     std::vector<jshort> data(got / 2);
@@ -544,15 +552,7 @@ jint hooked_java_direct(JNIEnv* env, jobject self, jobject buffer, jint count, j
     if (!bps || got % bps || (bps != 3 && reinterpret_cast<uintptr_t>(data) % bps)) return got;
     process_java(env, self, got / bps, bps, [&](StreamCtx* ctx, size_t frames, unsigned channels) {
         if (bps == 3) {
-            auto* packed = static_cast<uint8_t*>(data);
-            std::vector<int16_t> samples(got / 3);
-            for (size_t i = 0; i < samples.size(); ++i) {
-                samples[i] = avcrt::pcm24_to_s16(packed + i * 3);
-            }
-            ctx->engine->process(samples.data(), frames);
-            for (size_t i = 0; i < samples.size(); ++i) {
-                avcrt::s16_to_pcm24(samples[i], packed + i * 3);
-            }
+            process_packed(ctx, static_cast<uint8_t*>(data), frames, channels);
         } else process_pcm(ctx, data, frames, channels, bps);
         return true;
     });

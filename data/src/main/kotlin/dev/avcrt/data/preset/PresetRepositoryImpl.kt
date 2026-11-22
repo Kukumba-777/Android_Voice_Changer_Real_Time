@@ -93,12 +93,19 @@ class PresetRepositoryImpl @Inject constructor(
 
     private fun customsFlow(): Flow<List<Preset>> = dataStore.data.map { readCustoms(it) }
 
-    private fun readCustoms(prefs: Preferences): List<Preset> {
+    internal fun readCustoms(prefs: Preferences): List<Preset> {
         val raw = prefs[CUSTOM_PRESETS_KEY] ?: return emptyList()
         return runCatching {
             json.decodeFromString(presetListSerializer, raw)
         }.onFailure { Timber.e(it, "Failed to decode custom presets") }
             .getOrDefault(emptyList())
+    }
+
+    internal fun mergeCustoms(prefs: MutablePreferences, incoming: List<Preset>) {
+        val existing = readCustoms(prefs)
+        val ids = existing.mapTo(hashSetOf()) { it.id }
+        val added = incoming.filter { ids.add(it.id) }
+        if (added.isNotEmpty()) prefs[CUSTOM_PRESETS_KEY] = json.encodeToString(presetListSerializer, existing + added)
     }
 
     private suspend inline fun mutate(crossinline block: (MutablePreferences) -> Unit): AvcrtResult<Unit> =

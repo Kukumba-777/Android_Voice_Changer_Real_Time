@@ -17,6 +17,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import timber.log.Timber
+import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -58,13 +59,22 @@ class RvcVoiceConverter @Inject constructor(
     private var f0Session: OrtSession? = null
     private var netG: OrtSession? = null
     private var voice: VoiceModel? = null
-    private var fingerprint: String? = null
+    private data class ModelFile(val path: String, val bytes: Long, val modifiedAt: Long) {
+        constructor(file: File) : this(file.path, file.length(), file.lastModified())
+    }
+
+    private var fingerprint: List<ModelFile>? = null
 
     override suspend fun prepare(shared: SharedModels, voice: VoiceModel): AvcrtResult<Unit> =
         withContext(dispatchers.io) {
             lock.withLock {
-                val fp = "${shared.contentVecPath}|${shared.f0Path}|${voice.netGPath}"
-                if (fp == fingerprint && netG != null) return@withLock AvcrtResult.Success(Unit)
+                // The Files screen can delete and re-import a model under the same name.
+                val fp = listOf(shared.contentVecPath, shared.f0Path, voice.netGPath)
+                    .map { path -> ModelFile(File(path)) }
+                if (fp == fingerprint && netG != null) {
+                    this@RvcVoiceConverter.voice = voice
+                    return@withLock AvcrtResult.Success(Unit)
+                }
                 runCatching {
                     releaseLocked()
                     // NNAPI gave ~0 gain on VITS/NSF-HiFiGAN (ops fall back to CPU) + slower load → CPU+threads.

@@ -1422,7 +1422,7 @@ int main(int argc, char** argv) {
             g_cvp_rebuild_present ? "optional in-kernel request after route settles" : "rollback and settle only");
 
     ConfigStore cfg;
-    Engine engine(kRate, kChannels);
+    Engine engine(kRate, kChannels, /*soundboard=*/true);
     Session s;
     int64_t applied_revision = -1;
     const size_t frames = kPeriod;

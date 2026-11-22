@@ -12,6 +12,9 @@ import dev.avcrt.domain.converter.ConversionParams
 import dev.avcrt.domain.converter.SharedModels
 import dev.avcrt.domain.converter.VoiceConverter
 import dev.avcrt.domain.converter.VoiceModel
+import dev.avcrt.domain.media.MediaFile
+import dev.avcrt.domain.media.MediaFolder
+import dev.avcrt.domain.media.MediaRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -30,7 +33,6 @@ enum class ConverterPhase { IDLE, RECORDING, CONVERTING, PLAYING, LIVE }
 data class VoiceOption(val id: String, val name: String, val path: String)
 
 data class ConverterUiState(
-    val modelsDir: String = "",
     val sharedReady: Boolean = false,
     val voices: List<VoiceOption> = emptyList(),
     val selectedVoiceId: String? = null,
@@ -47,10 +49,10 @@ class ConverterViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val converter: VoiceConverter,
     private val dispatchers: DispatcherProvider,
+    private val library: MediaRepository,
 ) : ViewModel() {
 
     private val audio = ConverterAudio(dispatchers)
-    private val modelsDir = File(context.getExternalFilesDir(null), "models").apply { mkdirs() }
     private val outputDir = File(context.getExternalFilesDir(null), "output").apply { mkdirs() }
 
     private var recorded: ShortArray? = null
@@ -60,29 +62,33 @@ class ConverterViewModel @Inject constructor(
     private var liveJob: Job? = null
     @Volatile private var liveActive = false
 
-    private val _state = MutableStateFlow(ConverterUiState(modelsDir = modelsDir.absolutePath))
+    private var sharedModels: SharedModels? = null
+    private val _state = MutableStateFlow(ConverterUiState())
     val state = _state.asStateFlow()
 
     init {
-        scan()
+        viewModelScope.launch { library.observe(MediaFolder.MODELS).collect(::updateModels) }
     }
 
     /** Re-reads the models folder: detects the shared pair + lists voice (net_g) models. */
-    fun scan() {
-        val files = modelsDir.listFiles()?.toList().orEmpty()
-        val sharedReady = File(modelsDir, CONTENTVEC).exists() && File(modelsDir, RMVPE).exists()
+    fun scan() { viewModelScope.launch { library.refresh(MediaFolder.MODELS) } }
+
+    private fun updateModels(files: List<MediaFile>) {
+        val content = files.firstOrNull { it.id.equals(CONTENTVEC, ignoreCase = true) }
+        val pitch = files.firstOrNull { it.id.equals(RMVPE, ignoreCase = true) }
+        sharedModels = if (content != null && pitch != null) SharedModels(content.absolutePath, pitch.absolutePath) else null
         val voices = files
-            .filter { it.isFile && it.name.endsWith(".onnx", ignoreCase = true) && it.name.lowercase() !in SHARED_NAMES }
-            .sortedBy { it.name.lowercase() }
-            .map { VoiceOption(id = it.name, name = it.nameWithoutExtension, path = it.absolutePath) }
+            .filter { it.id.lowercase() !in SHARED_NAMES }
+            .sortedBy { it.id.lowercase() }
+            .map { VoiceOption(id = it.id, name = it.displayName, path = it.absolutePath) }
         val selectedId = _state.value.selectedVoiceId?.takeIf { id -> voices.any { it.id == id } }
             ?: voices.firstOrNull()?.id
         _state.value = _state.value.copy(
-            sharedReady = sharedReady,
+            sharedReady = sharedModels != null,
             voices = voices,
             selectedVoiceId = selectedId,
-            modelSampleRate = voices.find { it.id == selectedId }?.let { guessSampleRate(it.name) }
-                ?: _state.value.modelSampleRate,
+            modelSampleRate = if (selectedId == _state.value.selectedVoiceId) _state.value.modelSampleRate
+            else voices.find { it.id == selectedId }?.let { guessSampleRate(it.name) } ?: _state.value.modelSampleRate,
         )
     }
 
@@ -132,7 +138,8 @@ class ConverterViewModel @Inject constructor(
     fun convert() {
         val s = _state.value
         val voice = s.voices.find { it.id == s.selectedVoiceId }
-        if (!s.sharedReady) {
+        val shared = sharedModels
+        if (shared == null) {
             _state.value = s.copy(message = context.getString(R.string.converter_models_missing_short))
             return
         }
@@ -147,10 +154,6 @@ class ConverterViewModel @Inject constructor(
         }
         viewModelScope.launch {
             _state.value = _state.value.copy(phase = ConverterPhase.CONVERTING)
-            val shared = SharedModels(
-                contentVecPath = File(modelsDir, CONTENTVEC).absolutePath,
-                f0Path = File(modelsDir, RMVPE).absolutePath,
-            )
             val model = VoiceModel(
                 id = voice.id,
                 name = voice.name,
@@ -215,7 +218,8 @@ class ConverterViewModel @Inject constructor(
         val s = _state.value
         if (s.phase != ConverterPhase.IDLE) return
         val voice = s.voices.find { it.id == s.selectedVoiceId }
-        if (!s.sharedReady) {
+        val shared = sharedModels
+        if (shared == null) {
             _state.value = s.copy(message = context.getString(R.string.converter_models_missing_short)); return
         }
         if (voice == null) {
@@ -224,10 +228,6 @@ class ConverterViewModel @Inject constructor(
         liveActive = true
         liveJob = viewModelScope.launch {
             _state.value = _state.value.copy(phase = ConverterPhase.LIVE, hasResult = false)
-            val shared = SharedModels(
-                File(modelsDir, CONTENTVEC).absolutePath,
-                File(modelsDir, RMVPE).absolutePath,
-            )
             val model = VoiceModel(voice.id, voice.name, voice.path, s.modelSampleRate, 768)
             val prep = converter.prepare(shared, model)
             if (prep is AvcrtResult.Failure) {

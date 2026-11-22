@@ -3,10 +3,9 @@
     <string name="converter_title">AI-голос</string>
 
     <string name="converter_models_header">Модели</string>
-    <string name="converter_models_missing">Нет contentvec.onnx и/или rmvpe.onnx. Положи обе общие модели в папку ниже.</string>
+    <string name="converter_models_missing">Импортируйте общие модели contentvec.onnx и rmvpe.onnx в разделе «Файлы → ИИ-модели».</string>
     <string name="converter_models_missing_short">Общие модели (contentvec.onnx, rmvpe.onnx) не найдены</string>
-    <string name="converter_models_dir">Папка: %1$s</string>
-    <string name="converter_no_voices">Нет голосов. Положи голосовую модель net_g .onnx в папку и нажми «Сканировать».</string>
+    <string name="converter_no_voices">Нет голосовых моделей. Импортируйте модель net_g в формате ONNX в разделе «Файлы → ИИ-модели».</string>
     <string name="converter_scan">Сканировать папку</string>
 
     <string name="converter_record_header">Твой голос</string>

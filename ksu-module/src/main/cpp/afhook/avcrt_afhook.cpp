@@ -44,6 +44,7 @@
 
 #include "avcrt_inlinehook.h"
 #include "avcrt_engine.h"
+#include "avcrt_paths.h"
 #include "avcrt_config.h"   // DspConfig
 #include "avcrt_af_backend.h"
 
@@ -157,6 +158,7 @@ void refresh_config() {
     wc.preserve_formants = prop_i("avcrt.dsp.preserve_formants", 1);
     wc.crispness = prop_i("avcrt.dsp.crispness", 5);
     parse_fx_props(wc.fx);
+    wc.fx.bypass_voice = prop_i(avcrt::paths::kBypassVoiceProperty, 0) != 0;
     static int dbg = 0;
     if (dbg < 3) { LOGI("cfg from props: enabled=%d rev=%d pitch=%.1f formant=%.1f gain=%.1f",
                         wc.enabled, wc.revision, wc.pitch, wc.formant, wc.gain); dbg++; }
@@ -225,7 +227,7 @@ StreamCtx *ctx_for(const void *self) {
         if (rate < 4000 || rate > 192000) { rate = 0; bps = 0; }  // nonsense → passthrough
         c->rate = rate; c->channels = ch; c->bps = bps;
         if (bps != 0 && rate != 0 && ch != 0) {
-            c->engine = new Engine(rate, ch);
+            c->engine = new Engine(rate, ch, /*soundboard=*/true);
             c->applied_rev = -2;
         }
         static int dbg = 0;
@@ -256,6 +258,8 @@ void process_pcm(StreamCtx *c, void *raw, size_t frames, uint32_t channels, int 
     if (frames == 0 || !c->engine) return;
     if (bps == 2) {
         c->engine->process(static_cast<int16_t *>(raw), frames);
+    } else if (c->engine->voiceBypassed()) {
+        c->engine->mixSound(static_cast<float*>(raw), frames);
     } else {  // bps == 4 → float PCM
         size_t n = frames * channels;
         if (c->i16.size() < n) c->i16.resize(n);

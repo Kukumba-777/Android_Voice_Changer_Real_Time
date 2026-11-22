@@ -1,0 +1,23 @@
+<resources>
+    <string name="files_title">Файлы</string>
+    <string name="files_models">ИИ-модели</string>
+    <string name="files_sounds">Звуки</string>
+    <string name="files_models_hint">Импортируйте модели ONNX для ИИ-конвертера. Для общих моделей сохраните имена contentvec.onnx и rmvpe.onnx.</string>
+    <string name="files_sounds_hint">Импортируйте клипы длиной до %1$d сек. Их можно проигрывать из плавающего окна, пока AVCRT включён.</string>
+    <string name="files_import">Импортировать файлы</string>
+    <string name="files_imported">Импортировано файлов: %1$d из %2$d.</string>
+    <string name="files_open_failed">Не удалось открыть выбранный файл.</string>
+    <string name="files_empty">В этой папке пока нет файлов.</string>
+    <string name="files_deleted">Файл удалён.</string>
+    <string name="files_delete">Удалить</string>
+    <string name="files_delete_title">Удалить этот файл?</string>
+    <string name="files_backup">Резервная копия</string>
+    <string name="files_backup_export">Сохранить резервную копию</string>
+    <string name="files_backup_restore">Восстановить из копии</string>
+    <string name="files_backup_choose">Выбрать ZIP</string>
+    <string name="files_backup_restore_hint">Добавит недостающие пользовательские пресеты, звуки и модели ONNX, не заменяя существующие. Применит сохранённый язык, оформление и настройку экспериментальных эффектов. Не включит движок и не изменит активный пресет.</string>
+    <string name="files_backup_saved">Резервная копия сохранена.</string>
+    <string name="files_backup_restored">Копия восстановлена. Существующие пресеты и файлы сохранены.</string>
+    <string name="files_backup_export_failed">Не удалось сохранить копию. Проверьте свободное место и размеры файлов.</string>
+    <string name="files_backup_restore_failed">Не удалось восстановить копию. Проверьте ZIP и свободное место.</string>
+</resources>

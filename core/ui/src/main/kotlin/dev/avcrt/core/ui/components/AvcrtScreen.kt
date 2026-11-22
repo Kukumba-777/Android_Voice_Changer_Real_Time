@@ -30,6 +30,7 @@ fun AvcrtScreen(
     actions: @Composable () -> Unit = {},
     navigationIcon: @Composable () -> Unit = {},
     floatingActionButton: @Composable () -> Unit = {},
+    snackbarHost: @Composable () -> Unit = {},
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val scrollBehavior: TopAppBarScrollBehavior =
@@ -53,6 +54,7 @@ fun AvcrtScreen(
             )
         },
         floatingActionButton = floatingActionButton,
+        snackbarHost = snackbarHost,
         contentWindowInsets = WindowInsets(0),
     ) { innerPadding ->
         Box(

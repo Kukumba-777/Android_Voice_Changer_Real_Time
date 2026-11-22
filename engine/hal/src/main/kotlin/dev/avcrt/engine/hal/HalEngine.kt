@@ -117,19 +117,20 @@ class HalEngine @Inject constructor(
     override suspend fun stop(): AvcrtResult<Unit> = withRoot { mutate(enable = false) }
 
     override suspend fun applyPreset(preset: Preset): AvcrtResult<Unit> = withRoot {
-        previewing = false
-        settings.setActivePresetId(preset.id)
-        writeConfig(
-            enabled = state.value is EngineState.Running,
-            preset = preset,
-        )
+        mutex.withLock {
+            previewing = false
+            settings.setActivePresetId(preset.id)
+            writeConfig(enabled = settings.snapshot().engineEnabled, preset = preset)
+        }
     }
 
     override suspend fun previewPreset(preset: Preset): AvcrtResult<Unit> = withRoot {
         // enabled = true so it's audible live even if the master switch is off; deliberately does NOT
         // touch settings (activePresetId / engineEnabled) — stopPreview puts the real config back.
-        previewing = true
-        writeConfig(enabled = true, preset = preset)
+        mutex.withLock {
+            previewing = true
+            writeConfig(enabled = true, preset = preset)
+        }
     }
 
     override fun stopPreview() {
@@ -139,11 +140,15 @@ class HalEngine @Inject constructor(
         // engine's own @Singleton scope.
         scope.launch {
             runCatching {
-                val s = settings.snapshot()
-                val all = presets.observeAll().first()
-                val active = s.activePresetId?.let { id -> all.firstOrNull { it.id == id } }
-                    ?: all.firstOrNull()
-                if (active != null) writeConfig(enabled = s.engineEnabled, preset = active)
+                mutex.withLock {
+                    if (!previewing) {
+                        val s = settings.snapshot()
+                        val all = presets.observeAll().first()
+                        val active = s.activePresetId?.let { id -> all.firstOrNull { it.id == id } }
+                            ?: all.firstOrNull()
+                        if (active != null) writeConfig(enabled = s.engineEnabled, preset = active)
+                    }
+                }
             }.onFailure { Timber.w(it, "stopPreview restore failed") }
         }
     }
@@ -176,12 +181,29 @@ class HalEngine @Inject constructor(
             ?: all.firstOrNull()
             ?: return AvcrtResult.Failure(AvcrtError.Unknown("No preset available"))
         val res = writeConfig(enabled = enable, preset = preset)
-        if (res is AvcrtResult.Success) settings.setEngineEnabled(enable)
+        if (res is AvcrtResult.Success) {
+            if (enable && s.activePresetId != preset.id) {
+                settings.setActivePresetId(preset.id)
+                presets.setActive(preset.id)
+            }
+            settings.setEngineEnabled(enable)
+        }
         res
     }
 
     private suspend fun writeConfig(enabled: Boolean, preset: Preset): AvcrtResult<Unit> {
-        revision++
+        // Native consumers survive the app process and the hook parses this as a signed int.
+        // Seed from both published values in case a prior write stopped before setprop.
+        if (revision == 0L) {
+            val property = (rootAccess.exec("getprop ${AvcrtPaths.RELOAD_PROPERTY}") as? AvcrtResult.Success)
+                ?.value?.trim()?.toIntOrNull()?.toLong() ?: 0L
+            val file = (rootAccess.readFile(AvcrtPaths.ACTIVE_PRESET_FILE) as? AvcrtResult.Success)
+                ?.value?.let { runCatching { json.decodeFromString(EngineConfigDto.serializer(), it).revision }.getOrNull() }
+                ?.takeIf { it in 1..Int.MAX_VALUE.toLong() } ?: 0L
+            revision = maxOf(property, file)
+            if (revision == Int.MAX_VALUE.toLong() && minOf(property, file) == 1L) revision = 1L
+        }
+        revision = if (revision == Int.MAX_VALUE.toLong()) 1L else revision + 1L
         val dto = EngineConfigDto(
             enabled = enabled,
             presetId = preset.id,
@@ -191,6 +213,7 @@ class HalEngine @Inject constructor(
         val payload = json.encodeToString(EngineConfigDto.serializer(), dto)
         val write = rootAccess.writeFile(AvcrtPaths.ACTIVE_PRESET_FILE, payload, "0644")
         if (write is AvcrtResult.Failure) return write
+        if (!enabled) rootAccess.exec("rm -f '${AvcrtPaths.SOUNDBOARD_CLIP}'")
         // Sentinel file so the native module can fail-fast without parsing JSON.
         rootAccess.writeFile(AvcrtPaths.ENGINE_STATE_FILE, if (enabled) "on" else "off", "0644")
         // Mirror the DSP config to system properties so the Zygisk app-capture
@@ -206,7 +229,7 @@ class HalEngine @Inject constructor(
                 // Clear first so a failed write cannot leave the previous preset enabled.
                 append("if [ \"\$(getprop debug.avcrt.af_capture)\" = 1 ]; then ")
                 append("setprop debug.avcrt.af_config 0; ")
-                if (enabled) {
+                if (enabled && !d.bypassVoice) {
                     append(
                         "setprop debug.avcrt.af_config " +
                             "'1,${d.pitchSemitones},${d.formantSemitones},${d.gainDb}," +
@@ -215,6 +238,7 @@ class HalEngine @Inject constructor(
                 }
                 append("fi; ")
                 append("setprop ${AvcrtPaths.PROP_ENABLED} ${if (enabled) 1 else 0}; ")
+                append("setprop ${AvcrtPaths.PROP_BYPASS_VOICE} ${b(d.bypassVoice)}; ")
                 append("setprop ${AvcrtPaths.PROP_PITCH} ${d.pitchSemitones}; ")
                 append("setprop ${AvcrtPaths.PROP_FORMANT} ${d.formantSemitones}; ")
                 append("setprop ${AvcrtPaths.PROP_GAIN} ${d.gainDb}; ")
