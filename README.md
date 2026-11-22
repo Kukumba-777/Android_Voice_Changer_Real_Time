@@ -1,226 +1,106 @@
 # AVCRT — Android Voice Changer Real Time
 
-System-wide real-time voice changer for rooted Android devices (KernelSU / Magisk).
-Pitch & formant shifting is applied at the audio HAL level so it works for VoIP, regular
-calls, voice messages, recorders — anything that opens an `AudioRecord` against the
-mic / voice_communication / voice_call source.
+AVCRT is a real-time voice changer for rooted Android devices. It provides an
+Android app for controlling voice presets and a root module with native audio
+processing backends.
 
-> Status: **MVP scaffold.** All architecture, UI, persistence, root layer, IPC and the
-> native audio effect skeleton are in place. The C++ effect compiles against Rubber Band
-> v3 and the Android Audio Effects Framework, but has only been smoke-tested in CI; you
-> should expect to tune the effect descriptor & `audio_effects.xml` overlay for your
-> specific device's audio HAL.
+The project has been tested on **POCO F6** and **OnePlus Nord**. Results depend
+on the device, Android build, root setup, and the audio path used by each app;
+not every recorder, camera, VoIP app, or phone call is guaranteed to work.
 
----
+## What works
 
-## Project layout
+- **App audio capture:** The Zygisk backend processes supported microphone
+  capture in app processes, including compatible `AudioRecord` paths. Testing
+  confirmed changed voice in saved Camera, Telegram, and Recorder audio on
+  POCO F6 and OnePlus Nord. An app that delegates recording to a separate
+  service or uses an unsupported audio format/path may not be processed.
+- **GSM/cellular calls:** Voice processing in cellular calls requires a
+  compatible kernel with the AVCRT kernel patches. This has so far been tested
+  on **OnePlus Nord only**. Support on other devices and kernels is unverified.
+  The kernel changes are device/kernel-specific and are **not included in this
+  repository**. Advanced users can adapt the required AVCRT kernel changes to
+  their own kernel source, build and flash a matching test kernel, then report
+  the results. This is not a ready-made universal kernel patch.
 
-```
-avcrt/
-├── build-logic/              Convention plugins (no per-module Gradle duplication)
-├── gradle/libs.versions.toml The single source of truth for every version
-│
-├── app/                      Application module — entry, navigation, manifest, themes
-│
-├── core/
-│   ├── common/               Coroutine dispatchers, AvcrtResult, LogSink, shared paths
-│   ├── ui/                   Material 3 theme (dynamic color), design system tokens
-│   ├── datastore/            DataStore<Preferences> Hilt-provided singleton
-│   └── root/                 RootAccess abstraction + libsu-backed impl (KSU/Magisk/su)
-│
-├── domain/                   Pure business contracts: Preset, EngineState, repos, use cases
-├── data/                     Repository implementations + bundled presets.json
-│
-├── feature/
-│   ├── home/                 Master switch + status cards
-│   ├── presets/              Built-in + custom presets, apply UX
-│   ├── logs/                 In-memory ring buffer view with share/clear
-│   └── settings/             Theme, locale, dynamic color, root, about
-│
-├── engine/
-│   ├── api/                  Wire-format types shared with the native module
-│   └── hal/                  VoiceEnginePort impl: writes JSON, installs KSU module
-│
-└── ksu-module/               C++ Android Audio Effect + module template + bundling task
-    └── src/main/cpp/         Effect adapter, Rubber Band wrapper, JSON config reader
-    └── src/main/module/      Magisk-format scripts and system overlay
-```
+The module also contains a shared AudioFlinger/HAL capture backend for supported
+audio servers. It is system-wide rather than per-app and may affect other
+microphone consumers. Treat it as device-dependent experimental functionality;
+verify saved recordings, routing, and mute behavior on your device before
+relying on it.
 
-Architecture: clean / modular MVP. Features depend only on `:domain` (the interfaces);
-implementations live in `:data` and `:engine:hal` and are wired in `:app` via Hilt
-multibindings. Adding a new tab is one new `:feature:*` Gradle module + one entry in
-`TopDestination` — nothing else needs to change.
+## Requirements
 
----
+- Rooted Android device with **KernelSU or Magisk**.
+- Android 12 or newer for the app.
+- For building: JDK 17, Android SDK, NDK and CMake. The pinned versions are in
+  `gradle/libs.versions.toml`.
+- Internet access for the first native build, which downloads the pinned
+  SoundTouch, nlohmann/json, and tinyalsa sources.
 
-## How the runtime fits together
+## Build
 
-The module's Zygisk JNI hook processes PCM16 and float reads from Java
-`AudioRecord` in the process that owns the recorder. The preset editor's
-**Test** button exercises this path; `avcrtzy: java-read FIRED` confirms that
-samples were processed. A recorder that delegates capture to a separate media
-service does not exercise this hook. Native VoIP and AAudio have separate
-paths and are not verified by this test.
-
-The cellular daemon identifies cards and PCM devices by controls and front-end
-names. Only recognized routing backends are supported. Failed codec setup
-rolls back the daemon's mixer edits and waits for a route change or engine
-toggle. `--unmute` only clears the dedicated AVCRT mute control; it does not
-reconstruct HAL routing after an abnormal daemon exit.
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ APP PROCESS                                                                 │
-│ ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│ │   Home VM    │  │ Presets VM   │  │   Logs VM    │  │ Settings VM  │      │
-│ └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘      │
-│        │                 │                 │                 │              │
-│        ▼                 ▼                 ▼                 ▼              │
-│ ┌─────────────────────────────────────────────────────────────────────────┐ │
-│ │           :domain — VoiceEnginePort · *Repository · UseCases            │ │
-│ └────────────┬───────────────────┬──────────────────────┬─────────────────┘ │
-│              │                   │                      │                   │
-│      ┌───────▼──────┐    ┌──────▼──────┐         ┌─────▼─────┐              │
-│      │ HalEngine    │    │  DataStore  │         │  LogSink  │              │
-│      │ (engine/hal) │    │ (core/ds)   │         │ (common)  │              │
-│      └───────┬──────┘    └─────────────┘         └───────────┘              │
-│              │                                                              │
-└──────────────┼──────────────────────────────────────────────────────────────┘
-               │ writes /data/local/tmp/avcrt/active_preset.json
-               │ setprop avcrt.config.revision <N>
-               ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ AUDIO HAL PROCESS  (audioserver)                                            │
-│  /system/etc/audio_effects.xml routes  AUDIO_SOURCE_MIC, voice_communication│
-│  voice_call, etc.  ──►  libavcrtfx.so                                       │
-│                         ├ ConfigStore  ── polls system property             │
-│                         └ Engine       ── Rubber Band pitch + formant shift │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-The native effect is registered system-wide via the audio_effects manifest; once mounted
-by KernelSU / Magisk and the device is rebooted, every recording app on the device routes
-its mic audio through us.
-
----
-
-## Building
-
-### Prerequisites
-- Android Studio Iguana or newer (or `Gradle 8.10.x` + JDK 17 + Android SDK 34)
-- Android NDK 26 or newer with CMake 3.22+
-- Internet access on the first build (`FetchContent` pulls Rubber Band & nlohmann/json)
-- A rooted device with **KernelSU** (Magisk works too) and **Android 12+**
-
-### Generating the Gradle wrapper
-
-The wrapper JAR is intentionally not committed. From the project root:
-
-```sh
-gradle wrapper --gradle-version 8.10.2
-```
-
-(Android Studio will offer to do this for you on first sync.)
-
-### Build the app
+Open the project in Android Studio, or build from the command line:
 
 ```sh
 ./gradlew :app:assembleDebug
 ```
 
-The build packages the native components and two module archives into the APK:
-the default archive with the cellular daemon and Zygisk app capture, and a
-cellular-only recovery archive without a `zygisk/` directory. Both have the same
-module ID so the manager can stage recovery as an update, not a second module.
+The debug APK is written to:
 
-The APK ends up at `app/build/outputs/apk/debug/app-debug.apk`.
-
-For a clean SDK setup, use `./build_avcrtd.sh` (or `./build_avcrtd.sh --compile-sdk 35`).
-Set `ANDROID_HOME` or `ANDROID_SDK_ROOT` to an SDK with command-line tools and
-accept the SDK licenses first. The script installs the selected SDK platform and the
-catalog-pinned Build Tools, NDK, and CMake, builds the debug APK, and prints SHA-256 checksums
-for the APK and both module ZIPs.
-
-The **Build AVCRT APK** workflow runs on pull requests and can be started manually
-from the Actions tab. It keeps the APK, both ZIPs, and a checksum file for 14 days.
-A manual run on the default branch can also send the APK to Telegram (off by
-default). Set the repository Actions secrets `TELEGRAM_BOT_TOKEN` and
-`TELEGRAM_CHAT_ID` before enabling delivery. Only the APK is sent, with a 50 MB
-upload limit.
-
----
-
-## Installing the root module
-
-1. Install the APK on a rooted device.
-2. Open AVCRT — the Home tab will show **“Install module”**.
-3. Tap it. The app:
-   - extracts `avcrt-module.zip` from its assets,
-   - shells out as root (`ksud module install` / `magisk --install-module`),
-   - writes a manifest under `/data/local/tmp/avcrt/`.
-4. Reboot the device. Recheck Home: files on disk, pending changes, and a running
-   daemon are separate states. Zygisk capture still needs a compatible active loader.
-5. Pick a preset on the Presets tab, flip the master switch on the Home tab, then test by
-   recording a voice memo or making a VoIP call.
-
-Cellular routing on Lahaina/Yupik (`lahainayupikidp`) remains experimental and
-requires handset validation. As with Lito, the daemon checks for a unique card
-with the required mixer controls and PCM endpoints; the card label is not a
-compatibility signal. App-level Zygisk capture does not need the cellular kernel patch.
-After updating the module, use the daemon's read-only probe to see which card,
-PCM endpoints, and mixer controls were found before testing a call:
-
-```sh
-adb shell "su -c '/data/adb/modules/avcrt/bin/avcrtd --probe-voice-card'"
+```text
+app/build/outputs/apk/debug/app-debug.apk
 ```
 
-On Kitsune 30.7, a module containing `zygisk/` can be skipped at boot when its
-Zygisk loader is inactive (`avcrt: ignore` in the manager log). Another reboot
-with the unchanged package does not resolve that. If Home offers **Cellular only**,
-that action installs the recovery archive through the detected manager; it does
-not enable Zygisk or provide app/VoIP processing. You can also make the primary
-archive cellular-only at build time with `-PavcrtCellularOnly=true` to avoid an
-extra install/reboot on a device that already exhibits this problem. Keep the
-default build for devices where app/VoIP capture is wanted.
+The APK bundles the regular root module. The build also creates a cellular-only
+recovery module without the Zygisk app-capture payload. For a clean SDK setup,
+`build_avcrtd.sh` can install the SDK components pinned by the project and build
+the APK:
 
-Read the current-boot daemon log and native capture events separately in Logs.
-For Zygisk capture from a fresh process, use `adb logcat -d -s avcrtzy`. A hook
-initialization event or a mapped library is not evidence of processed PCM.
+```sh
+./build_avcrtd.sh
+```
 
-The experimental AudioFlinger backend is not included by default. To isolate
-it for development, use `-PavcrtCellularOnly=true -PavcrtExperimentalAf=true`.
-That backend looks for one compatible, already-loaded symbol owner in the
-audioserver namespace. No match, ambiguity, or a rejected prologue means no hook.
+GitHub Actions builds the APK and module archives for pull requests and manual
+runs. Generated APKs and ZIPs are build artifacts, not source files.
 
----
+## Install and use
 
-## Customizing
+1. Install the AVCRT APK on a rooted device and grant root access when prompted.
+2. In the app, choose **Install module** and install the bundled module.
+3. Reboot so the root manager can load the module and its Zygisk payload.
+4. Select a preset, enable processing, and start a **new** recording or call.
+5. Listen to the saved recording or have the other party verify the call audio.
 
-| What | Where | How |
-| --- | --- | --- |
-| App version | `gradle/libs.versions.toml` (`versionCode`, `versionName`) | Bump and rebuild |
-| Module version | `gradle/libs.versions.toml` (`moduleVersion`, `moduleVersionCode`) | Bump and rebuild — module.prop and `BundledModuleMeta` are regenerated |
-| Built-in presets | `data/src/main/assets/presets.json` | Add an entry; both EN/RU names |
-| Theme palette fallback | `core/ui/.../BrandColors.kt` | Edit the seed constants |
-| Supported locales | `app/build.gradle.kts` `resourceConfigurations` + each feature's `values-XX/` | Add language tag + translations |
-| Default brand color in launcher | `app/src/main/res/values/colors.xml` `launcher_background` | Single source |
-| Default audio effect routing | `ksu-module/src/main/module/system/etc/audio_effects.xml` | Add/remove `<stream type="...">` blocks |
+Changing a preset or the master switch during an active recording/call may not
+take effect until the next capture session. Installing a new APK does not
+automatically replace a root module already installed by the manager; update
+the module and reboot as needed.
 
-There is intentionally **no hardcoding** in the Kotlin source — preset values come from
-JSON, version strings from the catalog, paths from a single constants object that the
-Kotlin side and the C++ side share (`AvcrtPaths.kt` + `avcrt_paths.h`).
+## GSM kernel patches
 
----
+Cellular-call support is separate from app recording support. The native daemon
+needs the AVCRT kernel controls and a compatible call-audio route. The only
+confirmed device so far is OnePlus Nord; the kernel changes must match the
+exact device kernel source and configuration. Kernel patch files are not
+provided in this repository.
 
-## Notes & caveats
+If you want to experiment on another device, adapt the required AVCRT kernel
+changes to your kernel source, build and flash your own test kernel, and
+validate calls cautiously. Keep a recovery path and a known-good boot image.
+Do not flash a kernel built for another device. Please share the device model,
+kernel source/revision, changes, and test results when reporting compatibility.
 
-- **License**: Rubber Band v3 is GPL, which extends to the bundled `libavcrtfx.so`. The
-  Kotlin app and Hilt graph have no Rubber Band dependency and remain Apache-2.0.
-- **Per-app locale**: handled via `AppCompatDelegate.setApplicationLocales` — works on
-  API 31+ without needing API 33's per-app locale system.
-- **Material You**: dynamic colors via `dynamicLightColorScheme` / `dynamicDarkColorScheme`.
-  Falls back to `BrandColors` when the user disables dynamic color in Settings.
-- **Devices that don't auto-merge overlays**: some OEM audio HALs don't honor
-  `audio_effects*.xml` overlays placed under `/system/etc`. The install script falls back
-  to the legacy `.conf` format when XML isn't found. Custom-AOSP devices may need a
-  manual `vendor/etc` overlay — open the Logs tab for hints.
+## Development notes
+
+- App and module version values are maintained in `gradle/libs.versions.toml`.
+- The DSP uses SoundTouch; retain its license notices when redistributing builds.
+- Audio compatibility is determined by the actual capture and routing path, not
+  simply by Android version or file extension.
+- Local diagnostics and experiments are intentionally excluded from the GitHub
+  source publication; the shipped app/module build does not require them.
+
+## License
+
+See the repository license and third-party notices. SoundTouch is distributed
+under its own license; comply with its terms when redistributing AVCRT builds.

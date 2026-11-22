@@ -45,3 +45,23 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# Local diagnostics, experiments and regression tests; keep these in the
+# working copy, but do not publish them with the app/module sources.
+/tools/
+/ksu-module/src/test/
+/ksu-module/src/source-rom/
+/ksu-module/src/stagefright-probe/
+
+# Generated native/Java artifacts (keep source and checked-in wrapper JARs).
+*.class
+*.o
+*.a
+*.so
+*.dSYM/
+
+# Local IDE state and build reports
+/.idea/workspace.xml
+/.idea/caches/
+**/.kotlin/
+*.log
