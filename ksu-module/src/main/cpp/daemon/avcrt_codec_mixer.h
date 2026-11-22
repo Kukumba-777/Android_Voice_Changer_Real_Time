@@ -2,6 +2,8 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -34,6 +36,65 @@ bool off(const Control& ctl) {
         if (ctl.get(i) != 0) return false;
     }
     return true;
+}
+
+struct DecActivity {
+    unsigned capture = 0;
+    unsigned elsewhere = 0;
+
+    template <typename Control>
+    void inspect(const char* name, int cap_aif, const Control& ctl) {
+        int aif, dec, end = 0;
+        if (!name || std::sscanf(name, "TX_AIF%d_CAP Mixer DEC%d%n", &aif, &dec, &end) != 2 ||
+            !end || name[end] || dec < 0 || dec >= 8 || off(ctl)) return;
+        (aif == cap_aif ? capture : elsewhere) |= 1u << dec;
+    }
+};
+
+template <typename Control>
+int enum_value(const Control& ctl, const char* value) {
+    if (ctl.kind() != Kind::Enum || !supported(ctl.kind(), ctl.count())) return -1;
+    const unsigned count = ctl.enums();
+    const int live = ctl.get(0);
+    if (live < 0 || static_cast<unsigned>(live) >= count) return -1;
+    for (unsigned i = 0; i < count; ++i) {
+        const char* item = ctl.enum_name(i);
+        if (item && std::strcmp(item, value) == 0) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+struct SpareDec {
+    int index = -1;
+    char modem_switch[40]{};
+    char capture_switch[40]{};
+    char dec_mux[24]{};
+    char source_mux[24]{};
+};
+
+template <typename Lookup>
+SpareDec pick_spare_dec(unsigned unavailable, int modem_aif, int cap_aif,
+                        const char* dec_source, const char* mic_source, Lookup lookup) {
+    // Keep the preference for higher indices, but require a complete, idle tap.
+    // A missing route on a codec with fewer decimators is not an idle route.
+    for (int i = 3; i < 11; ++i) {
+        const int dec = i % 8;
+        if (unavailable & (1u << dec)) continue;
+        SpareDec spare;
+        std::snprintf(spare.modem_switch, sizeof(spare.modem_switch), "TX_AIF%d_CAP Mixer DEC%d", modem_aif, dec);
+        std::snprintf(spare.capture_switch, sizeof(spare.capture_switch), "TX_AIF%d_CAP Mixer DEC%d", cap_aif, dec);
+        if (!off(lookup(spare.modem_switch)) || !off(lookup(spare.capture_switch))) continue;
+
+        std::snprintf(spare.dec_mux, sizeof(spare.dec_mux), "TX DEC%d MUX", dec);
+        std::snprintf(spare.source_mux, sizeof(spare.source_mux), "TX %s MUX%d",
+                      std::strcmp(dec_source, "SWR_MIC") == 0 ? "SMIC" : "DMIC", dec);
+        if (enum_value(lookup(spare.dec_mux), dec_source) < 0 ||
+            enum_value(lookup(spare.source_mux), mic_source) < 0) continue;
+
+        spare.index = dec;
+        return spare;
+    }
+    return {};
 }
 
 template <typename Control>

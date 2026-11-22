@@ -415,28 +415,6 @@ bool discover_codec_uplink(int& session, int& aif) {
     return found;
 }
 
-// A free spare decimator (not a modem dec) for our parallel capture. Prefer HIGH indices
-// (DEC3+) so it can't collide with the modem's typically-low decimators or a transition latch.
-int pick_spare_dec(int excluded) {
-    for (int i = 3; i < 11; ++i) {
-        const int dec_index = i % 8;
-        if (excluded & (1 << dec_index)) continue;
-        bool free = true;
-        for (unsigned j = 0; j < mixer_get_num_ctls(g_mixer); ++j) {
-            mixer_ctl* ctl = mixer_get_ctl(g_mixer, j);
-            int aif, dec, end = 0;
-            const char* name = mixer_ctl_get_name(ctl);
-            if (name && sscanf(name, "TX_AIF%d_CAP Mixer DEC%d%n", &aif, &dec, &end) == 2 &&
-                end && !name[end] && dec == dec_index && mixer_ctl_get_value(ctl, 0) != 0) {
-                free = false;
-                break;
-            }
-        }
-        if (free) return dec_index;
-    }
-    return -1;
-}
-
 // Decide which clean-replace flow this call supports + the VoiceMMode session (1/2).
 //  - USB-card headset on the uplink (VoiceMMode*_Tx <- USB_AUDIO_TX) -> MODE_HEADSET (reroute flow).
 //  - Codec mic on the uplink (built-in DMIC *or* analog-headset ADC, DISCOVERED) -> MODE_BUILTIN.
@@ -484,7 +462,8 @@ pcm_config make_usb_cfg() {
 // ---- engage / disengage ----------------------------------------------------
 
 struct CodecControl {
-    explicit CodecControl(const char* name) : ctl(g_mixer ? mixer_get_ctl_by_name(g_mixer, name) : nullptr) {}
+    explicit CodecControl(const char* name) : CodecControl(g_mixer ? mixer_get_ctl_by_name(g_mixer, name) : nullptr) {}
+    explicit CodecControl(mixer_ctl* control) : ctl(control) {}
     codec::Kind kind() const {
         if (ctl) {
             const auto type = mixer_ctl_get_type(ctl);
@@ -495,6 +474,7 @@ struct CodecControl {
     }
     unsigned count() const { return ctl ? mixer_ctl_get_num_values(ctl) : 0; }
     unsigned enums() const { return ctl ? mixer_ctl_get_num_enums(ctl) : 0; }
+    const char* enum_name(unsigned index) const { return mixer_ctl_get_enum_string(ctl, index); }
     int get(unsigned index) const { return ctl ? mixer_ctl_get_value(ctl, index) : -1; }
     bool set(unsigned index, int value) const {
         return ctl && mixer_ctl_set_value(ctl, index, value) == 0;
@@ -502,21 +482,27 @@ struct CodecControl {
     mixer_ctl* ctl;
 };
 
+// Do not mistake a connected DEC with a ZERO mic source for a free AIF.
+// Include every AIF in the spare's occupancy check, not just the two we use.
+codec::DecActivity dec_activity(int cap_aif) {
+    codec::DecActivity activity;
+    for (unsigned i = 0; i < mixer_get_num_ctls(g_mixer); ++i) {
+        mixer_ctl* ctl = mixer_get_ctl(g_mixer, i);
+        activity.inspect(mixer_ctl_get_name(ctl), cap_aif, CodecControl(ctl));
+    }
+    return activity;
+}
+
 struct Session {
     int   mode       = MODE_NONE;
     int   session    = 0;          // VoiceMMode 1 or 2
     int   modem_mask = 0;          // DECs the AHAL shows in the modem leg (discovered AIF)
     int   mute_mask  = 0;          // DECs we actually mute
     int   modem_aif  = 1;          // AIF carrying the modem mic (1=TX_3, 2=TX_4) — DISCOVERED
-    int   spare_dec  = 0;
+    codec::SpareDec spare;
     MicSrc mic;                    // the modem mic source we replicate on the spare (DMIC/ADC)
     char  inj_mixer[48] = {0};     // Incall_Music[_2] Audio Mixer MultiMedia9
     char  cap_from[48]  = {0};     // MultiMedia1 Mixer TX_CDC_DMA_TX_<cap> = our capture FE source
-    char  spare_dmic_mux[20] = {0};
-    char  spare_smic_mux[20] = {0};
-    char  spare_dec_mux[20] = {0};
-    char  spare_aif[28] = {0};       // TX_AIF<cap>_CAP Mixer DEC<spare> (our capture leg)
-    char  spare_aif1[28] = {0};      // TX_AIF<modem>_CAP Mixer DEC<spare> (the MODEM leg — must stay 0)
     struct pcm* cap = nullptr;     // built-in: spare-DEC capture through the discovered capture PCM
     struct pcm* inj = nullptr;     // incall_music injection through the discovered playback PCM
     // ---- headset mode only ----
@@ -554,19 +540,19 @@ bool codec_switch(Session& s, const char* name, bool spare = false) {
 
 bool codec_enum(Session& s, const char* name, const char* value) {
     CodecControl ctl(name);
-    if (ctl.kind() != codec::Kind::Enum) return false;
-    for (unsigned i = 0; i < ctl.enums(); ++i) {
-        const char* item = mixer_ctl_get_enum_string(ctl.ctl, i);
-        if (item && !strcmp(item, value)) return codec_write(s, ctl, name, i, true);
+    const int index = codec::enum_value(ctl, value);
+    if (index < 0) {
+        fprintf(stderr, "[avcrtd] gsm mixer: '%s' cannot select '%s'\n", name, value);
+        return false;
     }
-    return false;
+    return codec_write(s, ctl, name, index, true);
 }
 
 bool codec_route_matches(const Session& s) {
-    if (s.codec_edits.empty() || !codec::off(CodecControl(s.spare_aif1))) return false;
+    if (s.codec_edits.empty() || !codec::off(CodecControl(s.spare.modem_switch))) return false;
     const char* other_dma = s.modem_aif == 1 ? kCapFromTx3 : kCapFromTx4;
     if (!codec::off(CodecControl(other_dma)) ||
-        decs_in_aif(s.modem_aif == 1 ? 2 : 1) != (1 << s.spare_dec)) return false;
+        decs_in_aif(s.modem_aif == 1 ? 2 : 1) != (1 << s.spare.index)) return false;
     for (const auto& edit : s.codec_edits) {
         if (!codec::matches(CodecControl(edit.name.c_str()), edit)) return false;
     }
@@ -576,13 +562,15 @@ bool codec_route_matches(const Session& s) {
 void rollback_codec(Session& s) {
     // If HAL has changed the spare's source or routed it into another AIF, do not
     // put our old mux state back over the new route. These are value checks, not ALSA locks.
-    MicSrc live = discover_mic_source(s.spare_dec);
-    const bool attached = !codec::off(CodecControl(s.spare_aif));
-    const bool reused = !codec::off(CodecControl(s.spare_aif1)) || (attached && (!live.valid ||
+    MicSrc live = discover_mic_source(s.spare.index);
+    const bool attached = !codec::off(CodecControl(s.spare.capture_switch));
+    const auto activity = dec_activity(s.modem_aif == 1 ? 2 : 1);
+    const bool reused = (activity.elsewhere & (1u << s.spare.index)) ||
+        !codec::off(CodecControl(s.spare.modem_switch)) || (attached && (!live.valid ||
         strcmp(live.dec_mux, s.mic.dec_mux) || strcmp(live.sub_mux, s.mic.sub_mux)));
     int session = 0, aif = 0;
     const bool sole_uplink = attached && is_in_call() && discover_codec_uplink(session, aif) &&
-        aif != s.modem_aif && decs_in_aif(aif) == (1 << s.spare_dec);
+        aif != s.modem_aif && decs_in_aif(aif) == (1 << s.spare.index);
     for (auto it = s.codec_edits.rbegin(); it != s.codec_edits.rend(); ++it) {
         if (it->before == it->written) continue;
         const char* name = it->name.c_str();
@@ -639,21 +627,19 @@ void restore_capture_ctl(const char* name, int saved, int ours) {
     if (saved >= 0 && saved != ours && mx_get(name) == ours) mx_set(name, saved);
 }
 
-// Brings up the clean-replace routing + opens the PCMs. Returns false on failure (caller
-// disengages). Assumes a codec call is up. NO HARDCODE: DISCOVERS the modem's mic path
-// (which AIF, which decimator, which DMIC/ADC source) and replicates the SAME source on a
-// spare decimator routed to the OTHER (free) AIF/DMA for capture. Built-in DMIC and an analog
-// Type-C->jack headset (ADC via SWR_MIC) are handled by the exact same code.
-bool engage(Session& s, int session) {
+// Read-only preflight. HAL can release a capture resource without changing the
+// modem route, so a preflight failure must not reject that route for the call.
+const char* prepare_codec(Session& s, int session, int expected_aif, int expected_mask,
+                          const MicSrc& expected_mic) {
     s.mode = MODE_BUILTIN;
     s.session = session;
 
     // DISCOVER the modem's uplink AIF (1=TX_CDC_DMA_TX_3, 2=TX_4) for this session.
     int dsess = session, aif = 1;
-    if (!discover_codec_uplink(dsess, aif) || dsess != session) return false;
+    if (!discover_codec_uplink(dsess, aif) || dsess != session || aif != expected_aif) return "uplink changed";
     s.modem_aif  = aif;
     s.modem_mask = decs_in_aif(aif);                        // the real-source decs feeding the modem
-    if (s.modem_mask == 0) return false;                    // not really a call
+    if (!s.modem_mask || s.modem_mask != expected_mask) return "modem DEC mask changed";
     // ALSO defensively mute DEC0. After a headset flow (which uses DEC0 as its bolero placeholder)
     // and a swap (type-c→...→codec), the codec DMA / CVP can stay LATCHED feeding the modem's TX
     // port from DEC0 even though TX_AIF only shows the new modem dec → the real voice leaks = the
@@ -665,13 +651,16 @@ bool engage(Session& s, int session) {
     // The modem's PRIMARY decimator + its mic source (DMICx digital / ADCx analog) — to replicate.
     int primary = __builtin_ctz((unsigned)s.modem_mask);
     s.mic = discover_mic_source(primary);
-    if (!s.mic.valid) return false;                         // couldn't read the call's mic source
+    if (!s.mic.valid || strcmp(s.mic.dec_mux, expected_mic.dec_mux) ||
+        strcmp(s.mic.sub_mux, expected_mic.sub_mux)) return "modem mic source changed or unreadable";
     // Multiple digital mics are normal for the handset. A mixed digital/analog
     // route is not a proven tap source: do not pick the lowest DEC by accident.
     for (unsigned bits = static_cast<unsigned>(s.modem_mask); bits; bits &= bits - 1) {
         MicSrc other = discover_mic_source(__builtin_ctz(bits));
         if (!other.valid || strcmp(other.dec_mux, s.mic.dec_mux) ||
-            (!strcmp(s.mic.dec_mux, "SWR_MIC") && strcmp(other.sub_mux, s.mic.sub_mux))) return false;
+            (!strcmp(s.mic.dec_mux, "SWR_MIC") && strcmp(other.sub_mux, s.mic.sub_mux))) {
+            return "mixed or unreadable modem mic sources";
+        }
     }
 
     // Capture via the OTHER AIF/DMA (the modem holds one of the two codec capture pairs; we use
@@ -679,31 +668,37 @@ bool engage(Session& s, int session) {
     int cap_aif = (aif == 1) ? 2 : 1;
     const char* cap_dma = (cap_aif == 1) ? kCapFromTx3 : kCapFromTx4;
     const char* off_dma = (cap_aif == 1) ? kCapFromTx4 : kCapFromTx3;
-    s.spare_dec = pick_spare_dec(s.mute_mask);
-    if (s.spare_dec < 0) return false;
-
     snprintf(s.inj_mixer, sizeof(s.inj_mixer),
              session == 1 ? "Incall_Music Audio Mixer MultiMedia9"
                           : "Incall_Music_2 Audio Mixer MultiMedia9");
     snprintf(s.cap_from,       sizeof(s.cap_from),       "%s", cap_dma);
-    snprintf(s.spare_dec_mux,  sizeof(s.spare_dec_mux),  "TX DEC%d MUX",  s.spare_dec);
-    snprintf(s.spare_dmic_mux, sizeof(s.spare_dmic_mux), "TX DMIC MUX%d", s.spare_dec);
-    snprintf(s.spare_smic_mux, sizeof(s.spare_smic_mux), "TX SMIC MUX%d", s.spare_dec);
-    snprintf(s.spare_aif,      sizeof(s.spare_aif),      "TX_AIF%d_CAP Mixer DEC%d", cap_aif, s.spare_dec);
-    snprintf(s.spare_aif1,     sizeof(s.spare_aif1),     "TX_AIF%d_CAP Mixer DEC%d", aif,     s.spare_dec);
+    const auto activity = dec_activity(cap_aif);
+    if (activity.capture) return "capture AIF busy or unreadable";
+    // Return the exact control that prevented the tap; do not claim it from HAL.
+    for (const char* name : {off_dma, cap_dma, static_cast<const char*>(s.inj_mixer)}) {
+        if (!codec::off(CodecControl(name))) return name;
+    }
+    s.spare = codec::pick_spare_dec(s.mute_mask | activity.elsewhere, aif, cap_aif,
+                                  s.mic.dec_mux, s.mic.sub_mux,
+                                  [](const char* name) { return CodecControl(name); });
+    return s.spare.index < 0 ? "no usable spare decimator" : nullptr;
+}
 
+// Only called after preflight. Keep journaled writes and verify the route again
+// after opening both PCMs, before committing mute.
+bool engage_codec(Session& s) {
+    const int session = s.session;
+    const int aif = s.modem_aif;
+    const int cap_aif = (aif == 1) ? 2 : 1;
+    const int primary = __builtin_ctz((unsigned)s.modem_mask);
     fprintf(stderr, "[avcrtd] engage: session=%d modem_aif=%d modem_mask=0x%x mic=%s/%s spare_dec=%d cap_aif=%d inject='%s'\n",
-            session, aif, s.modem_mask, s.mic.dec_mux, s.mic.sub_mux, s.spare_dec, cap_aif, s.inj_mixer);
+            session, aif, s.modem_mask, s.mic.dec_mux, s.mic.sub_mux, s.spare.index, cap_aif, s.inj_mixer);
 
     // 1) spare UNMUTED capture: DEC<spare> reads the SAME mic as the modem (replicated source),
     //    routed to the free AIF/DMA and discovered capture PCM. It must feed ONLY our capture leg, NEVER
     //    the modem leg (else the real voice leaks to the modem AND we pitch it = ADDITIVE).
-    const char* source_ctl = strcmp(s.mic.dec_mux, "SWR_MIC") == 0 ? s.spare_smic_mux : s.spare_dmic_mux;
-    if (decs_in_aif(cap_aif) || !codec::off(CodecControl(s.spare_aif1)) || !codec::off(CodecControl(s.spare_aif)) ||
-        !codec::off(CodecControl(off_dma)) || !codec::off(CodecControl(cap_dma)) ||
-        !codec::off(CodecControl(s.inj_mixer))) return false;
-    if (!codec_enum(s, s.spare_dec_mux, s.mic.dec_mux) || !codec_enum(s, source_ctl, s.mic.sub_mux) ||
-        !codec_switch(s, s.spare_aif, true) || !codec_switch(s, cap_dma)) return false;
+    if (!codec_enum(s, s.spare.dec_mux, s.mic.dec_mux) || !codec_enum(s, s.spare.source_mux, s.mic.sub_mux) ||
+        !codec_switch(s, s.spare.capture_switch, true) || !codec_switch(s, s.cap_from)) return false;
 
     pcm_config ccfg = make_cfg(), icfg = make_cfg();
     s.cap = pcm_open(g_card, g_cap_device, PCM_IN, &ccfg);
@@ -719,11 +714,18 @@ bool engage(Session& s, int session) {
     }
     if (!codec_switch(s, s.inj_mixer)) return false;
     s.inj = pcm_open(g_card, g_inj_device, PCM_OUT, &icfg);
-    if (!s.inj || !pcm_is_ready(s.inj) || !prime_inject(s)) return false;
+    if (!s.inj || !pcm_is_ready(s.inj)) {
+        fprintf(stderr, "[avcrtd] gsm inject open failed: %s\n", s.inj ? pcm_get_error(s.inj) : "null");
+        return false;
+    }
+    if (!prime_inject(s)) return false;
+    const auto activity = dec_activity(cap_aif);
+    const unsigned spare_bit = 1u << s.spare.index;
     int live_session = 0, live_aif = 0;
     if (!g_run.load() || !is_in_call() || find_usb_card() >= 0 ||
         !discover_codec_uplink(live_session, live_aif) || live_session != session ||
-        live_aif != aif || decs_in_aif(aif) != s.modem_mask || !codec_route_matches(s)) {
+        live_aif != aif || decs_in_aif(aif) != s.modem_mask || activity.capture != spare_bit ||
+        (activity.elsewhere & spare_bit) || !codec_route_matches(s)) {
         fprintf(stderr, "[avcrtd] gsm codec route changed during prime — abort before mute\n");
         return false;
     }
@@ -1458,6 +1460,7 @@ int main(int argc, char** argv) {
     bool cvp_pending = false;
     auto retry_at = Clock::time_point{};
     auto last_cvp = Clock::time_point{};
+    auto next_preflight_log = Clock::time_point{};
 
     auto apply_preset = [&]() {
         avcrt::DspConfig ec = dc;
@@ -1607,6 +1610,7 @@ int main(int argc, char** argv) {
                 bypass = false;
                 cvp_pending = false;
                 rejected_codec = {};
+                next_preflight_log = {};
             }
         } else {
             off_polls = 0;
@@ -1645,13 +1649,28 @@ int main(int argc, char** argv) {
         }
         Mode m = current.mode;
         int session = current.session;
+        if (m == MODE_BUILTIN) {
+            if (const char* blocked = prepare_codec(s, session, current.aif, current.mask, current.mic)) {
+                const auto now = Clock::now();
+                if (now >= next_preflight_log) {
+                    fprintf(stderr, "[avcrtd] gsm preflight: blocked by %s; keeping stock route "
+                            "(session=%d aif=%d modem_mask=0x%x mic=%s/%s)\n",
+                            blocked, session, current.aif, current.mask, current.mic.dec_mux, current.mic.sub_mux);
+                    next_preflight_log = now + std::chrono::seconds(5);
+                }
+                s = Session{};
+                sleep_ms(kIdlePollMs);
+                continue;
+            }
+            next_preflight_log = {};
+        }
         fprintf(stderr, "[avcrtd] gsm route stable: mode=%d session=%d aif=%d mask=0x%x usb=%d mic=%s/%s\n",
                 m, session, current.aif, current.mask, current.usb, current.mic.dec_mux, current.mic.sub_mux);
 
         apply_preset();
         bool ok = (m == MODE_BT)      ? engage_bt(s, session)
                 : (m == MODE_HEADSET) ? engage_headset(s, session)
-                                      : engage(s, session);
+                                      : engage_codec(s);
         if (!ok) {
             if (m == MODE_BUILTIN) {
                 rejected_codec = current;
