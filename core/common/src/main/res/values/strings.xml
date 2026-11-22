@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="error_generic">Something went wrong.</string>
+    <string name="error_root_unavailable">Root access is not available on this device.</string>
+    <string name="error_root_denied">Root access was denied.</string>
+    <string name="error_module_missing">The AVCRT module is not installed.</string>
+    <string name="error_module_version">The installed module version does not match the app.</string>
+    <string name="error_operation_failed">The operation could not be completed.</string>
+    <string name="error_storage_failed">Could not save the change.</string>
+    <string name="error_converter_failed">The voice conversion failed.</string>
+</resources>

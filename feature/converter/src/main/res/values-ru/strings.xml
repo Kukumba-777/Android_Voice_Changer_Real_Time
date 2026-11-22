@@ -15,7 +15,7 @@
     <string name="converter_play_original">Оригинал</string>
 
     <string name="converter_transpose">Транспонирование: %1$d пт</string>
-    <string name="converter_sample_rate">Частота модели (поменяй, если звук замедлен/ускорен)</string>
+    <string name="converter_sample_rate">Частота модели (по умолчанию 40 кГц; сверься с метаданными модели)</string>
 
     <string name="converter_convert">Конвертировать</string>
     <string name="converter_converting">Конвертация…</string>
@@ -31,4 +31,6 @@
     <string name="converter_need_voice">Сначала выбери голос</string>
     <string name="converter_need_recording">Сначала запиши голос</string>
     <string name="converter_permission_denied">Нет доступа к микрофону</string>
+    <string name="converter_record_failed">Не удалось записать звук.</string>
+    <string name="converter_live_failed">Не удалось выполнить конвертацию в реальном времени.</string>
 </resources>

@@ -5,8 +5,10 @@ import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import ai.onnxruntime.TensorInfo
 import dev.avcrt.core.common.dispatcher.DispatcherProvider
+import dev.avcrt.core.common.R
 import dev.avcrt.core.common.result.AvcrtError
 import dev.avcrt.core.common.result.AvcrtResult
+import dev.avcrt.core.common.result.UserMessage
 import dev.avcrt.domain.converter.ConversionParams
 import dev.avcrt.domain.converter.SharedModels
 import dev.avcrt.domain.converter.VoiceConverter
@@ -87,7 +89,7 @@ class RvcVoiceConverter @Inject constructor(
                     onFailure = { e ->
                         Timber.tag(TAG).e(e, "prepare failed")
                         releaseLocked()
-                        AvcrtResult.Failure(AvcrtError.Io("Не удалось загрузить модели: ${e.message}", e))
+                        AvcrtResult.Failure(AvcrtError.Io("Failed to load models: ${e.message}", e))
                     },
                 )
             }
@@ -106,11 +108,11 @@ class RvcVoiceConverter @Inject constructor(
             val v = voice
             if (cv == null || f0s == null || ng == null || v == null) {
                 return@withLock AvcrtResult.Failure(
-                    AvcrtError.Unknown("Конвертер не подготовлен — сначала prepare()"),
+                    AvcrtError.Unknown("Converter is not prepared; call prepare() first"),
                 )
             }
             if (inputPcm.isEmpty()) {
-                return@withLock AvcrtResult.Failure(AvcrtError.Unknown("Пустая запись"))
+                return@withLock AvcrtResult.Failure(AvcrtError.Unknown("Input recording is empty"))
             }
             runCatching {
                 val tStart = System.nanoTime()
@@ -120,7 +122,7 @@ class RvcVoiceConverter @Inject constructor(
                 val feats = upsample2x(runContentVec(cv, mono16k, v.vecChannels))   // (V1)
                 val cvMs = (System.nanoTime() - tA) / 1_000_000
                 val t = feats.size
-                require(t > 0) { "пустые признаки контента" }
+                require(t > 0) { "Content features are empty" }
 
                 val tB = System.nanoTime()
                 val f0 = estimateF0(mono16k, t)                                     // (V2) pure-DSP YIN
@@ -148,7 +150,13 @@ class RvcVoiceConverter @Inject constructor(
                 onSuccess = { AvcrtResult.Success(it) },
                 onFailure = { e ->
                     Timber.tag(TAG).e(e, "convert failed")
-                    AvcrtResult.Failure(AvcrtError.Io("Конвертация не удалась: ${e.message}", e))
+                    AvcrtResult.Failure(
+                        AvcrtError.Io(
+                            "Voice conversion failed: ${e.message}",
+                            e,
+                            UserMessage(R.string.error_converter_failed),
+                        ),
+                    )
                 },
             )
         }
@@ -414,7 +422,7 @@ class RvcVoiceConverter @Inject constructor(
         var v: Any? = t.value
         while (v is Array<*>) v = v.firstOrNull()   // drill [1][1][N] → [N]
         return v as? FloatArray
-            ?: throw IllegalStateException("неожиданный тип выхода ${t.value?.javaClass}")
+            ?: throw IllegalStateException("Unexpected output type ${t.value?.javaClass}")
     }
 
     // ───────────────────────── DSP helpers ─────────────────────────

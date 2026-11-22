@@ -7,6 +7,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.avcrt.core.common.dispatcher.DispatcherProvider
 import dev.avcrt.core.common.result.AvcrtResult
+import dev.avcrt.core.common.result.userText
 import dev.avcrt.domain.converter.ConversionParams
 import dev.avcrt.domain.converter.SharedModels
 import dev.avcrt.domain.converter.VoiceConverter
@@ -114,7 +115,10 @@ class ConverterViewModel @Inject constructor(
                 }
                 .onFailure { e ->
                     Timber.tag(TAG).e(e, "record failed")
-                    _state.value = _state.value.copy(phase = ConverterPhase.IDLE, message = e.message)
+                    _state.value = _state.value.copy(
+                        phase = ConverterPhase.IDLE,
+                        message = context.getString(R.string.converter_record_failed),
+                    )
                 }
         }
     }
@@ -173,7 +177,7 @@ class ConverterViewModel @Inject constructor(
                 }
                 is AvcrtResult.Failure -> _state.value = _state.value.copy(
                     phase = ConverterPhase.IDLE,
-                    message = outcome.error.message,
+                    message = outcome.error.userText(context),
                 )
             }
         }
@@ -230,7 +234,7 @@ class ConverterViewModel @Inject constructor(
                 liveActive = false
                 _state.value = _state.value.copy(
                     phase = ConverterPhase.IDLE,
-                    message = prep.error.message,
+                    message = prep.error.userText(context),
                 )
                 return@launch
             }
@@ -244,7 +248,7 @@ class ConverterViewModel @Inject constructor(
             }.onFailure { e ->
                 if (e !is CancellationException) {
                     Timber.tag(TAG).e(e, "live loop failed")
-                    _state.value = _state.value.copy(message = e.message)
+                    _state.value = _state.value.copy(message = context.getString(R.string.converter_live_failed))
                 }
             }
             liveActive = false
@@ -283,6 +287,9 @@ class ConverterViewModel @Inject constructor(
             "48k" in n -> 48000
             "40k" in n -> 40000
             "32k" in n -> 32000
+            // RVC v2 models commonly use 40 kHz, but filenames are not reliable
+            // metadata. Keep the conventional default explicit in the UI rather
+            // than silently claiming it was detected from the model.
             else -> 40000
         }
     }

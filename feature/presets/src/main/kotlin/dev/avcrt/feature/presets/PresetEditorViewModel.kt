@@ -1,10 +1,13 @@
 package dev.avcrt.feature.presets
 
+import android.content.Context
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.avcrt.core.common.result.AvcrtResult
+import dev.avcrt.core.common.result.userText
 import dev.avcrt.domain.engine.VoiceEnginePort
 import dev.avcrt.domain.preset.Preset
 import dev.avcrt.domain.preset.PresetDsp
@@ -76,6 +79,7 @@ internal const val PREVIEW_RECORD_SECONDS = 6
  */
 @HiltViewModel
 class PresetEditorViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val presets: PresetRepository,
     private val applyPreset: ApplyPresetUseCase,
     private val engine: VoiceEnginePort,
@@ -198,7 +202,7 @@ class PresetEditorViewModel @Inject constructor(
                     _state.update { it.copy(finished = true) }
                 }
                 is AvcrtResult.Failure ->
-                    _state.update { it.copy(message = res.error.message) }
+                    _state.update { it.copy(message = res.error.userText(context)) }
             }
         }
     }
@@ -209,7 +213,7 @@ class PresetEditorViewModel @Inject constructor(
             when (val res = presets.delete(id)) {
                 is AvcrtResult.Success -> _state.update { it.copy(finished = true) }
                 is AvcrtResult.Failure ->
-                    _state.update { it.copy(message = res.error.message) }
+                    _state.update { it.copy(message = res.error.userText(context)) }
             }
         }
     }
@@ -227,7 +231,7 @@ class PresetEditorViewModel @Inject constructor(
         previewJob = viewModelScope.launch {
             when (val applied = engine.previewPreset(buildPreviewPreset())) {
                 is AvcrtResult.Failure -> {
-                    _state.update { it.copy(message = applied.error.message, previewPhase = PreviewPhase.Idle) }
+                    _state.update { it.copy(message = applied.error.userText(context), previewPhase = PreviewPhase.Idle) }
                     return@launch
                 }
                 is AvcrtResult.Success -> Unit

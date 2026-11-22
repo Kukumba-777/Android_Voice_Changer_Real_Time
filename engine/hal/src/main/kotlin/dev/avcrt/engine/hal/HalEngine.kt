@@ -339,12 +339,12 @@ class HalEngine @Inject constructor(
         return when {
             module == ModuleRuntime.State.MISSING -> EngineState.ModuleNotInstalled
             module == ModuleRuntime.State.REBOOT -> EngineState.RebootRequired
-            module == ModuleRuntime.State.DISABLED -> EngineState.Error("Module disabled in root manager")
+            module == ModuleRuntime.State.DISABLED -> EngineState.Error(EngineState.ErrorReason.MODULE_DISABLED)
             module == ModuleRuntime.State.NOT_STARTED_WITH_ZYGISK -> EngineState.ModuleNotStartedWithZygisk
-            module == ModuleRuntime.State.NOT_STARTED -> EngineState.Error("Module not started this boot. Check the root manager boot log.")
-            module == ModuleRuntime.State.EARLY_BOOT_ONLY -> EngineState.Error("Module reached early boot, but its late-start service was not observed. Check the root manager boot log.")
-            module == ModuleRuntime.State.SERVICE_SEEN -> EngineState.Error("Module service ran this boot, but the daemon is not running. Check the daemon log.")
-            module == ModuleRuntime.State.UNKNOWN -> EngineState.Error("Module status could not be verified")
+            module == ModuleRuntime.State.NOT_STARTED -> EngineState.Error(EngineState.ErrorReason.SERVICE_NOT_STARTED)
+            module == ModuleRuntime.State.EARLY_BOOT_ONLY -> EngineState.Error(EngineState.ErrorReason.EARLY_BOOT_ONLY)
+            module == ModuleRuntime.State.SERVICE_SEEN -> EngineState.Error(EngineState.ErrorReason.SERVICE_NOT_RUNNING)
+            module == ModuleRuntime.State.UNKNOWN -> EngineState.Error(EngineState.ErrorReason.STATUS_UNKNOWN)
             engineEnabled && active != null -> EngineState.Running(active)
             else -> EngineState.ReadyDisabled(active)
         }

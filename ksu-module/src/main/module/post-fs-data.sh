@@ -17,7 +17,8 @@ rm -f /data/adb/avcrt_install_pending 2>/dev/null
 
 # The AF claim is non-persistent; only an installed hook publishes it.
 
-# safety: clear any stale codec mute from an unclean shutdown
+# Clear only AVCRT's dedicated mute control. Topology is deliberately not restored
+# from stale values because ownership cannot be proven across a daemon crash.
 "$MODDIR/bin/avcrtd" --unmute >/dev/null 2>&1 &
 
 # mirror active_preset.json -> props (single-line JSON; grep the fields)

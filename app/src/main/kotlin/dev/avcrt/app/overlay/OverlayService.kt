@@ -27,6 +27,7 @@ import dev.avcrt.domain.preset.PresetOrigin
 import dev.avcrt.domain.preset.PresetRepository
 import dev.avcrt.domain.usecase.ApplyPresetUseCase
 import dev.avcrt.domain.usecase.ToggleEngineUseCase
+import dev.avcrt.app.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -157,13 +158,13 @@ class OverlayService : Service() {
         val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             mgr.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "AVCRT overlay", NotificationManager.IMPORTANCE_MIN),
+                NotificationChannel(CHANNEL_ID, getString(R.string.overlay_channel_name), NotificationManager.IMPORTANCE_MIN),
             )
         }
         val notif: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_compass)
-            .setContentTitle("AVCRT")
-            .setContentText("Плавающее окно активно")
+            .setContentTitle(getString(R.string.overlay_notification_title))
+            .setContentText(getString(R.string.overlay_notification_text))
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .build()

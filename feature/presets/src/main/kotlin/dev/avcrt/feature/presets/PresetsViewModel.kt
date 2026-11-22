@@ -1,9 +1,12 @@
 package dev.avcrt.feature.presets
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.avcrt.core.common.result.AvcrtResult
+import dev.avcrt.core.common.result.userText
 import dev.avcrt.domain.preset.Preset
 import dev.avcrt.domain.preset.PresetOrigin
 import dev.avcrt.domain.preset.PresetRepository
@@ -28,6 +31,7 @@ data class PresetsUiState(
 
 @HiltViewModel
 class PresetsViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val presets: PresetRepository,
     private val applyPreset: ApplyPresetUseCase,
 ) : ViewModel() {
@@ -60,7 +64,7 @@ class PresetsViewModel @Inject constructor(
             applying.value = preset.id
             when (val res = applyPreset(preset.id)) {
                 is AvcrtResult.Success -> Unit
-                is AvcrtResult.Failure -> transient.value = res.error.message
+                is AvcrtResult.Failure -> transient.value = res.error.userText(context)
             }
             applying.value = null
         }
@@ -76,7 +80,7 @@ class PresetsViewModel @Inject constructor(
             )
             when (val res = presets.upsertCustom(copy)) {
                 is AvcrtResult.Success -> _editTarget.value = copy.id
-                is AvcrtResult.Failure -> transient.value = res.error.message
+                is AvcrtResult.Failure -> transient.value = res.error.userText(context)
             }
         }
     }
@@ -85,7 +89,7 @@ class PresetsViewModel @Inject constructor(
         viewModelScope.launch {
             when (val res = presets.delete(id)) {
                 is AvcrtResult.Success -> Unit
-                is AvcrtResult.Failure -> transient.value = res.error.message
+                is AvcrtResult.Failure -> transient.value = res.error.userText(context)
             }
         }
     }

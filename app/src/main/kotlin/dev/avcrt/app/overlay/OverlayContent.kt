@@ -40,6 +40,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import dev.avcrt.app.R
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -126,7 +128,7 @@ private fun CollapsedBubble(
     ) {
         Image(
             bitmap = appIcon,
-            contentDescription = "AVCRT",
+            contentDescription = stringResource(R.string.overlay_notification_title),
             modifier = Modifier
                 .size(50.dp)
                 .clip(CircleShape),
@@ -169,7 +171,7 @@ private fun ExpandedCard(
             // Header (drag handle) + collapse
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "AVCRT",
+                    stringResource(R.string.overlay_notification_title),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier
@@ -177,7 +179,7 @@ private fun ExpandedCard(
                         .draggableTap(onDrag, onClose),
                 )
                 IconButton(onClick = onClose, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Filled.Close, contentDescription = "Свернуть")
+                    Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.overlay_collapse))
                 }
             }
 
@@ -191,7 +193,7 @@ private fun ExpandedCard(
                 Text("🎤", fontSize = 16.sp)
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    "Изменение голоса",
+                    stringResource(R.string.overlay_voice_changer),
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.weight(1f),
                 )
@@ -208,13 +210,13 @@ private fun ExpandedCard(
                 Text("📂", fontSize = 16.sp)
                 Spacer(Modifier.width(8.dp))
                 CategoryPill(
-                    label = "Встроенные",
+                    label = stringResource(R.string.overlay_builtin),
                     selected = category == PresetOrigin.BUILT_IN,
                     onClick = { onPickCategory(PresetOrigin.BUILT_IN) },
                 )
                 Spacer(Modifier.width(6.dp))
                 CategoryPill(
-                    label = "Свои",
+                    label = stringResource(R.string.overlay_custom),
                     selected = category == PresetOrigin.CUSTOM,
                     onClick = { onPickCategory(PresetOrigin.CUSTOM) },
                 )
@@ -229,7 +231,7 @@ private fun ExpandedCard(
             ) {
                 if (presets.isEmpty()) {
                     Text(
-                        "Нет пресетов",
+                        stringResource(R.string.overlay_no_presets),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 8.dp),
@@ -258,7 +260,7 @@ private fun ExpandedCard(
                 Text("🎵", fontSize = 16.sp)
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    "Играть звук в звонок",
+                    stringResource(R.string.overlay_play_sound_in_call),
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.weight(1f),
                 )

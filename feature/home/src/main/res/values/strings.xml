@@ -29,4 +29,9 @@
     <string name="home_engine_error">Error: %1$s</string>
     <string name="home_floating_window_title">Floating window</string>
     <string name="home_floating_window_desc">Quick controls over other apps</string>
+    <string name="home_error_module_disabled">The module is disabled in the root manager.</string>
+    <string name="home_error_service_not_started">The module service did not start this boot. Check the root manager boot log.</string>
+    <string name="home_error_early_boot_only">The module reached early boot, but its late-start service was not observed. Check the root manager boot log.</string>
+    <string name="home_error_service_not_running">The module service ran, but the daemon is not running. Check the daemon log.</string>
+    <string name="home_error_status_unknown">Module status could not be verified.</string>
 </resources>

@@ -237,7 +237,15 @@ private fun ModuleStatusCard(state: HomeUiState, vm: HomeViewModel) {
             }
             stringResource(R.string.home_module_not_started_zygisk, stringResource(hint)) to true
         }
-        is EngineState.Error -> engine.reason to false
+         is EngineState.Error -> stringResource(
+             when (engine.reason) {
+                 EngineState.ErrorReason.MODULE_DISABLED -> R.string.home_error_module_disabled
+                 EngineState.ErrorReason.SERVICE_NOT_STARTED -> R.string.home_error_service_not_started
+                 EngineState.ErrorReason.EARLY_BOOT_ONLY -> R.string.home_error_early_boot_only
+                 EngineState.ErrorReason.SERVICE_NOT_RUNNING -> R.string.home_error_service_not_running
+                 EngineState.ErrorReason.STATUS_UNKNOWN -> R.string.home_error_status_unknown
+             },
+         ) to false
         else -> stringResource(R.string.home_module_installed) to false
     }
     Card(modifier = Modifier.fillMaxWidth()) {

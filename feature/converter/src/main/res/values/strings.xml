@@ -15,7 +15,7 @@
     <string name="converter_play_original">Original</string>
 
     <string name="converter_transpose">Transpose: %1$d st</string>
-    <string name="converter_sample_rate">Model sample rate (try another if the result sounds slow/fast)</string>
+    <string name="converter_sample_rate">Model sample rate (40 kHz default; verify the model metadata)</string>
 
     <string name="converter_convert">Convert</string>
     <string name="converter_converting">Converting…</string>
@@ -31,4 +31,6 @@
     <string name="converter_need_voice">Pick a voice model first</string>
     <string name="converter_need_recording">Record something first</string>
     <string name="converter_permission_denied">Microphone permission denied</string>
+    <string name="converter_record_failed">Could not record audio.</string>
+    <string name="converter_live_failed">Realtime conversion failed.</string>
 </resources>

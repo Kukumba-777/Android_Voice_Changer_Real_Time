@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="error_generic">Произошла ошибка.</string>
+    <string name="error_root_unavailable">На этом устройстве недоступен root.</string>
+    <string name="error_root_denied">Доступ root отклонён.</string>
+    <string name="error_module_missing">Модуль AVCRT не установлен.</string>
+    <string name="error_module_version">Версия установленного модуля не совпадает с версией приложения.</string>
+    <string name="error_operation_failed">Не удалось выполнить операцию.</string>
+    <string name="error_storage_failed">Не удалось сохранить изменение.</string>
+    <string name="error_converter_failed">Не удалось выполнить конвертацию голоса.</string>
+</resources>

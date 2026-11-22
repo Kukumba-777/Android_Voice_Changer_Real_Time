@@ -1,3 +1,6 @@
+// EXPERIMENTAL / NOT A PRODUCTION BACKEND.
+// This legacy fixed-topology daemon is excluded from CMakeLists.txt and the module package.
+// Do not use it as a generic device backend or as a crash-recovery tool.
 // avcrtd_clean — CLEAN cellular voice replace daemon.
 //
 // Far end hears ONLY the pitched voice; the real voice is removed from the modem

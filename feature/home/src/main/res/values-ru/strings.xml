@@ -29,4 +29,9 @@
     <string name="home_engine_error">Ошибка: %1$s</string>
     <string name="home_floating_window_title">Плавающее окно</string>
     <string name="home_floating_window_desc">Быстрые кнопки поверх других приложений</string>
+    <string name="home_error_module_disabled">Модуль отключён в менеджере root.</string>
+    <string name="home_error_service_not_started">Служба модуля не запускалась в этой загрузке. Проверьте журнал загрузки менеджера root.</string>
+    <string name="home_error_early_boot_only">Модуль прошёл раннюю загрузку, но его поздняя служба не обнаружена. Проверьте журнал загрузки менеджера root.</string>
+    <string name="home_error_service_not_running">Служба модуля запускалась, но daemon не работает. Проверьте журнал daemon.</string>
+    <string name="home_error_status_unknown">Не удалось проверить состояние модуля.</string>
 </resources>

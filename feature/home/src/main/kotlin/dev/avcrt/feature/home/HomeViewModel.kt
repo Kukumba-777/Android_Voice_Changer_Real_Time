@@ -1,10 +1,13 @@
 package dev.avcrt.feature.home
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.avcrt.core.common.result.AvcrtResult
 import dev.avcrt.core.common.result.onFailure
+import dev.avcrt.core.common.result.userText
 import dev.avcrt.core.root.RootAccess
 import dev.avcrt.domain.engine.VoiceEnginePort
 import dev.avcrt.domain.settings.SettingsRepository
@@ -23,6 +26,7 @@ import javax.inject.Inject
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val engine: VoiceEnginePort,
     private val toggleEngine: ToggleEngineUseCase,
     private val rootAccess: RootAccess,
@@ -67,7 +71,7 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             toggling.value = true
             toggleEngine(enable).onFailure { err ->
-                transient.value = err.message
+                transient.value = err.userText(context)
             }
             toggling.value = false
         }
@@ -76,7 +80,7 @@ class HomeViewModel @Inject constructor(
     fun onRequestRoot() {
         viewModelScope.launch {
             rootAccess.requestAccess().onFailure { err ->
-                transient.value = err.message
+                transient.value = err.userText(context)
             }
             engine.refreshState()
         }
@@ -88,7 +92,7 @@ class HomeViewModel @Inject constructor(
             installing.value = true
             when (val res = engine.installModule(withoutZygisk)) {
                 is AvcrtResult.Success -> engine.refreshState()
-                is AvcrtResult.Failure -> transient.value = res.error.message
+                is AvcrtResult.Failure -> transient.value = res.error.userText(context)
             }
             installing.value = false
         }
@@ -97,7 +101,7 @@ class HomeViewModel @Inject constructor(
     fun onReboot() {
         viewModelScope.launch {
             engine.reboot().onFailure { err ->
-                transient.value = err.message
+                transient.value = err.userText(context)
             }
         }
     }

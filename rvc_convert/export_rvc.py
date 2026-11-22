@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Convert an RVC v1/v2 net_g .pth -> dynamic-T .onnx for AVCRT (NO onnxsim => stays dynamic).
-import sys, torch
-sys.path.insert(0, "/home/niftox/avcrt/rvc_convert/rvc")
+import os, sys, torch
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "rvc"))
 from infer.lib.infer_pack.models_onnx import SynthesizerTrnMsNSFsidM
 inp, outp = sys.argv[1], sys.argv[2]
 cpt = torch.load(inp, map_location="cpu", weights_only=False)

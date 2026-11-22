@@ -57,9 +57,10 @@ constexpr unsigned kRate      = 16000;
 constexpr unsigned kChannels  = 1;
 constexpr unsigned kPeriod    = 256;
 constexpr unsigned kPeriods   = 4;
-constexpr unsigned kUsbRate   = 48000; // USB headset mic native rate (S16 mono); decimated 3:1 -> 16k
-constexpr unsigned kUsbDecim  = kUsbRate / kRate;        // 3
-constexpr unsigned kUsbPeriod = kPeriod * kUsbDecim;     // 768 USB frames -> 256 @16k
+constexpr unsigned kUsbRateDefault = 48000;
+constexpr unsigned kUsbPeriodMax = 768;
+unsigned g_usb_rate = kUsbRateDefault;
+unsigned g_usb_period = kUsbPeriodMax;
 constexpr int      kIdlePollMs = 400;  // how often we look for a call while idle
 
 // Capture/engage mode for the current call.
@@ -181,16 +182,35 @@ int find_usb_card() {
     if (!f) return -1;
     char line[256];
     int idx = -1, found = -1;
+    bool multiple = false;
     while (fgets(line, sizeof(line), f)) {
         int n;
         if (sscanf(line, " %d [", &n) == 1) idx = n;
         // USB-Audio cards advertise "USB-Audio" / "USB Audio" on the description line.
         if (idx >= 0 && (strstr(line, "USB-Audio") || strstr(line, "USB Audio"))) {
-            found = idx; break;
+            if (found >= 0 && found != idx) multiple = true;
+            else found = idx;
         }
     }
     fclose(f);
-    return found;
+    return multiple ? -1 : found;
+}
+
+unsigned find_usb_rate(int card, int device) {
+    if (card < 0 || device < 0) return 0;
+    pcm_params* params = pcm_params_get(card, device, PCM_IN);
+    if (!params) return 0;
+    const unsigned min_rate = pcm_params_get_min(params, PCM_PARAM_RATE);
+    const unsigned max_rate = pcm_params_get_max(params, PCM_PARAM_RATE);
+    const bool mono = pcm_params_get_min(params, PCM_PARAM_CHANNELS) <= 1 &&
+                      pcm_params_get_max(params, PCM_PARAM_CHANNELS) >= 1;
+    const bool s16 = pcm_params_format_test(params, PCM_FORMAT_S16_LE) != 0;
+    unsigned rate = 0;
+    for (const unsigned candidate : {48000u, 44100u, 32000u, 16000u}) {
+        if (candidate >= min_rate && candidate <= max_rate) { rate = candidate; break; }
+    }
+    pcm_params_free(params);
+    return mono && s16 ? rate : 0;
 }
 
 void resolve_cards() {
@@ -214,6 +234,9 @@ void resolve_cards() {
     g_usb_card = find_usb_card();
     if (g_usb_card == g_card) g_usb_card = -1;
     g_usb_cap_device = g_usb_card >= 0 ? find_pcm(g_usb_card, nullptr, true) : -1;
+    g_usb_rate = g_usb_cap_device >= 0 ? find_usb_rate(g_usb_card, g_usb_cap_device) : 0;
+    g_usb_period = g_usb_rate > 0 ? (g_usb_rate * kPeriod + kRate - 1) / kRate : kUsbPeriodMax;
+    if (!g_usb_rate) g_usb_cap_device = -1;
 }
 
 bool mx_set(const char* name, int value) {
@@ -451,10 +474,10 @@ pcm_config make_cfg() {
 // USB headset mic: 48k mono, 768-frame periods (== 256 @16k after 3:1 decimation).
 pcm_config make_usb_cfg() {
     pcm_config c; memset(&c, 0, sizeof(c));
-    c.channels = 1; c.rate = kUsbRate;
-    c.period_size = kUsbPeriod; c.period_count = kPeriods;
+    c.channels = 1; c.rate = g_usb_rate;
+    c.period_size = g_usb_period; c.period_count = kPeriods;
     c.format = PCM_FORMAT_S16_LE;
-    c.start_threshold = kUsbPeriod; c.stop_threshold = kUsbPeriod * kPeriods;
+    c.start_threshold = g_usb_period; c.stop_threshold = g_usb_period * kPeriods;
     return c;
 }
 
@@ -714,10 +737,16 @@ bool engage(Session& s, int session) {
 
 // Decimate 48k mono -> 16k mono (3:1) by averaging each group of 3 (cheap anti-alias).
 // in: kUsbPeriod (768) samples; out: kPeriod (256) samples.
-void decimate_3to1(const int16_t* in, int16_t* out, size_t out_frames) {
+void resample_usb_period(const int16_t* in, int16_t* out, size_t out_frames) {
+    const size_t in_frames = g_usb_period;
+    if (in_frames == 0 || out_frames == 0) return;
     for (size_t i = 0; i < out_frames; ++i) {
-        int32_t a = in[i * 3] + in[i * 3 + 1] + in[i * 3 + 2];
-        out[i] = (int16_t)(a / 3);
+        const double pos = static_cast<double>(i) * (in_frames - 1) /
+            (out_frames > 1 ? out_frames - 1 : 1);
+        const size_t left = static_cast<size_t>(pos);
+        const size_t right = left + 1 < in_frames ? left + 1 : left;
+        const double fraction = pos - static_cast<double>(left);
+        out[i] = static_cast<int16_t>(in[left] + (in[right] - in[left]) * fraction);
     }
 }
 
@@ -795,8 +824,8 @@ bool engage_headset(Session& s, int session) {
             if (s.usb_cap) { pcm_close(s.usb_cap); s.usb_cap = nullptr; }
             continue;
         }
-        int16_t tmp[kUsbPeriod];
-        if (pcm_read(s.usb_cap, tmp, sizeof(tmp)) == 0) { usb_started = true; break; }
+        std::vector<int16_t> tmp(g_usb_period);
+        if (pcm_read(s.usb_cap, tmp.data(), tmp.size() * sizeof(int16_t)) == 0) { usb_started = true; break; }
         // start failed (EPIPE) — close + reopen for a clean retry next attempt
         pcm_close(s.usb_cap); s.usb_cap = nullptr;
     }
@@ -1399,7 +1428,7 @@ int main(int argc, char** argv) {
     const size_t frames = kPeriod;
     const size_t bytes  = frames * kChannels * sizeof(int16_t);
     int16_t* buf = new int16_t[frames * kChannels];
-    int16_t* usbbuf = new int16_t[kUsbPeriod];        // headset 48k read buffer (decimated into buf)
+    std::vector<int16_t> usbbuf;
 
     // Background call-state poller (keeps dumpsys OUT of the audio loop). ALWAYS runs — both the
     // built-in and headset flows need is_in_call().
@@ -1542,13 +1571,14 @@ int main(int argc, char** argv) {
                         // configured; the inject still reaches the uplink). Do NOT disengage.
                     }
                 }
-                if (pcm_read(s.usb_cap, usbbuf, kUsbPeriod * sizeof(int16_t)) != 0) {
+                if (usbbuf.size() != g_usb_period) usbbuf.resize(g_usb_period);
+                if (pcm_read(s.usb_cap, usbbuf.data(), usbbuf.size() * sizeof(int16_t)) != 0) {
                     fprintf(stderr, "[avcrtd] usb_cap read err: %s\n", pcm_get_error(s.usb_cap));
                     AccCheck result = check_accessory(s);
                     rollback("USB capture", result, result != ACC_CHANGED);
                     continue;
                 }
-                decimate_3to1(usbbuf, buf, frames);     // 48k 768 -> 16k 256
+                resample_usb_period(usbbuf.data(), buf, frames);
                 engine.process(buf, frames);
             } else if (pcm_read(s.cap, buf, bytes) != 0) {
                 fprintf(stderr, "[avcrtd] cap read err: %s\n", pcm_get_error(s.cap));
@@ -1638,7 +1668,6 @@ int main(int argc, char** argv) {
     if (mon_ok) pthread_join(mon, nullptr);
     if (afmon_ok) pthread_join(afmon, nullptr);
     delete[] buf;
-    delete[] usbbuf;
     if (g_mixer) mixer_close(g_mixer);
     fprintf(stderr, "[avcrtd] service stopped\n");
     return 0;

@@ -1,11 +1,14 @@
 package dev.avcrt.feature.logs
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.avcrt.core.common.logging.LogEntry
 import dev.avcrt.core.common.logging.LogLevel
 import dev.avcrt.core.common.result.AvcrtResult
+import dev.avcrt.core.common.result.userText
 import dev.avcrt.domain.log.ExternalLogReader
 import dev.avcrt.domain.log.ExternalLogSource
 import dev.avcrt.domain.log.LogRepository
@@ -46,6 +49,7 @@ data class LogsUiState(
  */
 @HiltViewModel
 class LogsViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val logs: LogRepository,
     private val externalReader: ExternalLogReader,
 ) : ViewModel() {
@@ -103,7 +107,7 @@ class LogsViewModel @Inject constructor(
                 }
                 is AvcrtResult.Failure -> {
                     if (generation != refreshGeneration) return@launch
-                    external.update { it.copy(loading = false, error = res.error.message) }
+                    external.update { it.copy(loading = false, error = res.error.userText(context)) }
                 }
             }
         }

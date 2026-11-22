@@ -8,6 +8,14 @@ import dev.avcrt.domain.preset.Preset
  */
 sealed interface EngineState {
 
+    enum class ErrorReason {
+        MODULE_DISABLED,
+        SERVICE_NOT_STARTED,
+        EARLY_BOOT_ONLY,
+        SERVICE_NOT_RUNNING,
+        STATUS_UNKNOWN,
+    }
+
     /** Initial state before any probe runs. */
     data object Idle : EngineState
 
@@ -26,6 +34,6 @@ sealed interface EngineState {
     /** Engine is running, applying [activePreset] across the system audio path. */
     data class Running(val activePreset: Preset) : EngineState
 
-    /** Something went wrong; UI shows [reason]. */
-    data class Error(val reason: String) : EngineState
+    /** Something went wrong; the UI localizes [reason]. */
+    data class Error(val reason: ErrorReason) : EngineState
 }

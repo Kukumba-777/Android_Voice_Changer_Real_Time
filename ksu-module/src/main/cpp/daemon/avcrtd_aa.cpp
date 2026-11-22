@@ -1,3 +1,6 @@
+// EXPERIMENTAL / NOT A PRODUCTION BACKEND.
+// This legacy AAudio variant is excluded from CMakeLists.txt and the module package.
+// Its topology restoration is device-specific; do not use as generic crash recovery.
 // avcrtd_aa — cellular voice-changer daemon, AAudio capture variant.
 //
 // Capture path uses AAudio (AHAL-managed, VOICE_COMMUNICATION preset) instead of raw

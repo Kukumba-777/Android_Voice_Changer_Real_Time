@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="logs_title">Логи</string>
+    <string name="logs_filter_all">Все</string>
+    <string name="logs_filter_info">Info+</string>
+    <string name="logs_filter_warn">Warn+</string>
+    <string name="logs_filter_error">Error</string>
+    <string name="logs_clear">Очистить</string>
+    <string name="logs_share">Поделиться</string>
+    <string name="logs_empty">Записей в логе пока нет.</string>
+    <string name="logs_share_subject">Логи AVCRT</string>
+    <string name="logs_run_diagnostics">Запустить диагностику</string>
+    <string name="logs_source_app">Приложение</string>
+    <string name="logs_source_daemon">Daemon</string>
+    <string name="logs_source_zygisk">Zygisk</string>
+    <string name="logs_source_kernel">Kernel</string>
+    <string name="logs_refresh">Обновить</string>
+    <string name="logs_empty_source">Для этого источника записей пока нет. Нажмите «Обновить» после использования функции.</string>
+    <string name="logs_error_prefix">Не удалось прочитать этот источник логов: %1$s</string>
+</resources>
