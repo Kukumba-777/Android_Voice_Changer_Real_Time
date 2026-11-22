@@ -128,32 +128,30 @@ target_link_options(avcrtd PRIVATE -static-libstdc++)
 
 # -------------------------------------------------------------------
 # libzygisk_avcrt.so — Zygisk module for system-wide app voice change.
-# Loaded into every app process; PLT-hooks android::AudioRecord::read and pitches
-# the captured buffer in-place via avcrt::Engine. arm64 only — Zygisk doesn't load
-# the module into 32-bit app processes on a 64-bit device, so armeabi-v7a is skipped.
+# This payload is built for ARM64 app processes. It combines JNI hooks with
+# optional native entry-point hooks implemented by the AArch64 hooker.
 # -------------------------------------------------------------------
 if(ANDROID_ABI STREQUAL "arm64-v8a")
-    # Zygisk app-capture hook. Inline-hooks android::AudioRecord::read in libaudioclient via our
-    # own tiny AArch64 hooker (zygisk/avcrt_inlinehook.h) — see that file for why we don't use a
-    # general lib (shadowhook is dead on Android 16; Dobby's only release doesn't compile for
-    # Android). No external hook dependency, fully self-contained.
+    # Keep the capture backends self-contained; no external hook dependency.
     add_library(zygisk_avcrt SHARED
             zygisk/zygisk_avcrt.cpp
+            zygisk/avcrt_recorder.cpp
+            zygisk/avcrt_direct_aac.cpp
             src/avcrt_engine.cpp
             src/avcrt_log.cpp
     )
-    target_include_directories(zygisk_avcrt PRIVATE src zygisk)
+    target_include_directories(zygisk_avcrt PRIVATE src zygisk afhook)
     target_link_libraries(zygisk_avcrt PRIVATE
             log
+            mediandk
             SoundTouch
     )
     target_compile_options(zygisk_avcrt PRIVATE
             -Wall -Wextra -Wno-unused-parameter -O2 -fPIC -fvisibility=hidden
     )
-    # self-contained C++ runtime. Do NOT add -Wl,-z,max-page-size=16384: this device is 4KB
-    # pages and Magisk Zygisk's memfd module loader SILENTLY REFUSES a 16KB-aligned module .so
-    # (it then loads in NO app process — confirmed: zygisk_avcrt.so align 0x4000 didn't load,
-    # while default-4KB avcrtfx/avcrtd did). NDK's default 4KB alignment is what Zygisk accepts.
+    # Keep the verified 4 KiB artifact format. A prior 16 KiB-aligned build did
+    # not load with the tested Zygisk loader; alignment alone does not prove
+    # compatibility. Qualify a flexible-page build with actual loaders first.
     target_link_options(zygisk_avcrt PRIVATE -static-libstdc++)
 
     # ---------------------------------------------------------------

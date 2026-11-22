@@ -22,8 +22,8 @@ if [ "$(cat "$BOOT_FILE" 2>/dev/null)" != "$BOOT" ]; then
     printf '%s\n' "$BOOT" > "$BOOT_FILE" || exit 1
 fi
 
-# Derive the installed overlay destination from the module payload. Missing or
-# ambiguous overlays leave AudioFlinger untouched (Zygisk remains independent).
+# Derive the optional shared-HAL payload. Only the installed hook can claim
+# the backend. A daemon attempt or restart must not overwrite that claim.
 AVCRT_AF_PAYLOAD=
 for payload in "$MODDIR"/system/lib*/libavcrt_afhook.so; do
     [ -f "$payload" ] || continue

@@ -45,6 +45,7 @@
 #include "avcrt_inlinehook.h"
 #include "avcrt_engine.h"
 #include "avcrt_config.h"   // DspConfig
+#include "avcrt_af_backend.h"
 
 #define LOG_TAG "avcrtaf"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -192,9 +193,7 @@ int bps_for_format(uint32_t fmt) {
 }
 uint32_t channels_from_mask(uint32_t mask) {
     uint32_t c = static_cast<uint32_t>(__builtin_popcount(mask & 0x3FFFFFu));
-    if (c < 1) c = 1;
-    if (c > 8) c = 8;
-    return c;
+    return c >= 1 && c <= 8 ? c : 0;
 }
 
 // ---- per-stream pitch engine, keyed by AudioStreamIn* ----
@@ -225,7 +224,7 @@ StreamCtx *ctx_for(const void *self) {
         int bps       = bps_for_format(ac.format);
         if (rate < 4000 || rate > 192000) { rate = 0; bps = 0; }  // nonsense → passthrough
         c->rate = rate; c->channels = ch; c->bps = bps;
-        if (bps != 0 && rate != 0) {
+        if (bps != 0 && rate != 0 && ch != 0) {
             c->engine = new Engine(rate, ch);
             c->applied_rev = -2;
         }
@@ -274,24 +273,30 @@ void process_pcm(StreamCtx *c, void *raw, size_t frames, uint32_t channels, int 
 
 // ---- the hook: AudioStreamIn::read(void* buffer, size_t bytes, size_t* read) ----
 using read_fn = int (*)(void * /*this*/, void * /*buffer*/, size_t /*bytes*/, size_t * /*read*/);
-read_fn orig_read = nullptr;
+std::atomic<read_fn> orig_read{nullptr};
+
+void publish_original_read(void *trampoline) {
+    orig_read.store(reinterpret_cast<read_fn>(trampoline), std::memory_order_release);
+}
 
 int hooked_read(void *self, void *buffer, size_t bytes, size_t *read) {
-    int st = orig_read(self, buffer, bytes, read);
+    int st = orig_read.load(std::memory_order_acquire)(self, buffer, bytes, read);
     if (st != 0 || buffer == nullptr || read == nullptr) return st;  // data valid only on NO_ERROR(0)
+    // An installed trampoline is pass-through until the claim is published.
+    if (!avcrt::af_backend::claimed()) return st;
     size_t got = *read;
-    if (got == 0) return st;
+    if (got == 0 || got > bytes) return st;
 
     StreamCtx *c = ctx_for(self);
-    if (c->bps != 2 && c->bps != 4) return st;   // unsupported format / probe failed → passthrough
+    if (!c->engine) return st;  // Unsupported format or failed query: leave the buffer intact.
 
     maybe_refresh_config();
     WireConfig cfg = current_config();
     if (!cfg.enabled) return st;
 
-    uint32_t channels = c->channels ? c->channels : 1;
+    uint32_t channels = c->channels;
     size_t frame_size = static_cast<size_t>(channels) * static_cast<size_t>(c->bps);
-    if (frame_size == 0) return st;
+    if (frame_size == 0 || got % frame_size != 0) return st;
     size_t frames = got / frame_size;
     if (frames == 0) return st;
 
@@ -343,16 +348,31 @@ bool try_install() {
     }
     if (!candidate.handle) return false;
 
+    char pid[PROP_VALUE_MAX]{}, server_pid[PROP_VALUE_MAX]{};
+    snprintf(pid, sizeof(pid), "%d", getpid());
+    __system_property_get(avcrt::af_backend::kServerPid, server_pid);
+    if (!avcrt::af_backend::claim_matches(pid, server_pid)) {
+        dlclose(candidate.handle);
+        LOGW("AudioStreamIn hook skipped: init audioserver PID unavailable or mismatched (self=%s init=%s)",
+             pid, server_pid);
+        return true;
+    }
+
     void *addr = candidate.read;
     g_getAudioProperties = reinterpret_cast<getprops_fn>(candidate.props);
     refresh_config();
     int reason = 0;
-    void *tr = avcrt::avcrt_inline_hook(addr, (void *)hooked_read, &reason);
-    if (tr) { orig_read = (read_fn)tr;
-              LOGI("inline-hooked AudioStreamIn::read @%p (getProps=%p)", addr, (void *)g_getAudioProperties); }
-    else {
+    const char* detail = nullptr;
+    void *tr = avcrt::avcrt_inline_hook(addr, (void *)hooked_read, &reason, &detail, publish_original_read);
+    if (!tr) {
         dlclose(candidate.handle);
-        LOGW("AudioStreamIn::read hook SKIPPED @%p reason=%d (1=prologue 2=write 3=mem)", addr, reason);
+        LOGW("AudioStreamIn::read hook SKIPPED @%p reason=%d detail=%s",
+             addr, reason, detail ? detail : "unavailable");
+    } else if (__system_property_set(avcrt::af_backend::kProperty, pid) != 0) {
+        LOGW("AudioStreamIn::read installed in pass-through: claim publication failed (pid=%s)", pid);
+    } else {
+        LOGI("inline-hooked AudioStreamIn::read @%p (getProps=%p); exclusive backend claim pid=%s",
+             addr, (void *)g_getAudioProperties, pid);
     }
     return true;
 }

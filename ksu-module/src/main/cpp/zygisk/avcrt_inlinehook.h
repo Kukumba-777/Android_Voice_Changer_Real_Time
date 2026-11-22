@@ -101,7 +101,8 @@ inline bool avcrt_write_code(void* addr, const void* data, size_t len) {
 // signature to run the original) on success, or nullptr if the prologue isn't copy-safe / the
 // code write failed. `*reason` (optional) explains a nullptr.
 inline void* avcrt_inline_hook(void* target, void* replacement, int* reason = nullptr,
-                               const char** detail = nullptr) {
+                               const char** detail = nullptr,
+                               void (*publish_original)(void*) = nullptr) {
     auto set_reason = [&](int r) { if (reason) *reason = r; };
     if (detail) *detail = nullptr;
 
@@ -148,7 +149,11 @@ inline void* avcrt_inline_hook(void* target, void* replacement, int* reason = nu
     uint8_t patch[4 + kJumpLen];
     if (lead) memcpy(patch, target, lead);
     avcrt_make_abs_jump(patch + lead, replacement);
+    // Let callers publish the prepared trampoline before the replacement can
+    // be reached. This does not synchronize the executable code overwrite.
+    if (publish_original) publish_original(tramp);
     if (!avcrt_write_code(target, patch, copy_len)) {
+        if (publish_original) publish_original(nullptr);
         munmap(tramp, tramp_len);
         set_reason(HOOK_WRITE_FAILED);
         return nullptr;

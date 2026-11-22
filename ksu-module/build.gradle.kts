@@ -1,11 +1,11 @@
+import com.android.build.gradle.tasks.ExternalNativeBuildTask
 import java.security.MessageDigest
 import java.util.zip.ZipFile
 
 /**
  * Build the bundled KSU module:
- *   1. compile `libavcrtfx.so` for the target ABIs via NDK + CMake
- *   2. assemble a Magisk/KernelSU-format module zip with the .so files in
- *      `system/lib[64]/soundfx/` and the rest of the module template
+ *   1. compile the native targets via NDK + CMake
+ *   2. assemble a Magisk/KernelSU-format module zip from the release native outputs
  *   3. drop the zip into `app/src/main/assets/avcrt-module.zip`
  *
  * Module identity (id/name/version/etc.) comes from the version catalog so
@@ -40,14 +40,8 @@ android {
             }
         }
         ndk {
-            // Ship BOTH ARM ABIs: arm64-v8a (64-bit HALs, e.g.
-            // android.hardware.audio.service_64 on HyperOS) AND armeabi-v7a (32-bit HALs,
-            // e.g. android.hardware.audio.service on the OnePlus Nord — its effects loader
-            // searches /vendor/lib/soundfx). The audio HAL only loads a soundfx lib matching
-            // its OWN bitness, so a 32-bit HAL fails with "Could not find library in effect
-            // directories" if we ship arm64 only. (AGP runs CMake — incl. FetchContent of
-            // SoundTouch + nlohmann/json — once per ABI, so this ~doubles cold-build time.
-            // x86_64 still omitted: emulator-only.)
+            // Both ARM ABIs are built for the legacy soundfx target. The module
+            // ZIPs package ARM64 only; a 32-bit app does not get this Zygisk payload.
             //noinspection ChromeOsAbiSupport
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
@@ -78,7 +72,6 @@ val moduleDescription    = libs.versions.moduleDescription.get()
 val moduleTemplateDir = layout.projectDirectory.dir("src/main/module")
 val assemblyDir       = layout.buildDirectory.dir("ksu-module-assembly")
 val cellularOnly = providers.gradleProperty("avcrtCellularOnly").map { it.toBooleanStrict() }.orElse(false)
-val experimentalAf = providers.gradleProperty("avcrtExperimentalAf").map { it.toBooleanStrict() }.orElse(false)
 
 /**
  * Writes module.prop with values from the version catalog. The id MUST match
@@ -111,71 +104,30 @@ val stageModuleTemplate by tasks.registering(Sync::class) {
     into(templateOutput)
 }
 
-/**
- * Stages the cellular voice-changer daemon (`avcrtd`, arm64) into the module's
- * `bin/` and the Zygisk app-capture hook (`libzygisk_avcrt.so`, arm64) into
- * `zygisk/arm64-v8a.so`. Both come from the CMake build output. This REPLACES the
- * old soundfx libavcrtfx.so staging — that HAL-effect approach is dead (vendor
- * libeffects use-after-unload crash); the daemon + Zygisk hook are the live paths.
- *
- * AGP puts CMake target outputs under `build/intermediates/cxx/<variant>/<hash>/
- * obj/<abi>/` (unstripped) and `stripped_native_libs/.../<abi>/` (stripped). We
- * glob both and pick the executable + the .so.
- */
+// Package exact files from the release native task, not from whichever CMake
+// hash or variant happens to match a glob under build/intermediates.
 val stageModuleBinaries by tasks.registering(Sync::class) {
-    dependsOn("externalNativeBuildRelease")
-    val intermediates = layout.buildDirectory.dir("intermediates")
-
-    // avcrtd executable (arm64-v8a) -> bin/avcrtd
-    from(intermediates.map { dir ->
-        fileTree(dir) {
-            include("**/cxx/**/obj/arm64-v8a/avcrtd")
-            include("**/RelWithDebInfo/**/arm64-v8a/avcrtd")
-        }
-    }) {
-        eachFile { path = "bin/avcrtd" }
-        includeEmptyDirs = false
-        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-    }
-
-    // zygisk hook (arm64-v8a) -> zygisk/arm64-v8a.so
-    from(intermediates.map { dir ->
-        fileTree(dir) {
-            include("**/cxx/**/obj/arm64-v8a/libzygisk_avcrt.so")
-            include("**/RelWithDebInfo/**/arm64-v8a/libzygisk_avcrt.so")
-        }
-    }) {
-        eachFile { path = "zygisk/arm64-v8a.so" }
-        includeEmptyDirs = false
-        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-    }
-
-    // universal AudioFlinger hook (arm64-v8a) -> system/lib64/libavcrt_afhook.so.
-    // Magic-mounts to /system/lib64 (the only path the isolated audioserver linker namespace
-    // will dlopen from); avcrtd ptrace-injects it into audioserver at boot.
-    from(intermediates.map { dir ->
-        fileTree(dir) {
-            include("**/cxx/**/obj/arm64-v8a/libavcrt_afhook.so")
-            include("**/RelWithDebInfo/**/arm64-v8a/libavcrt_afhook.so")
-        }
-    }) {
-        eachFile { path = "system/lib64/libavcrt_afhook.so" }
-        includeEmptyDirs = false
-        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-    }
-
-    // ptrace injector helper (arm64-v8a) -> bin/avcrt_inject (avcrtd forks it).
-    from(intermediates.map { dir ->
-        fileTree(dir) {
-            include("**/cxx/**/obj/arm64-v8a/avcrt_inject")
-            include("**/RelWithDebInfo/**/arm64-v8a/avcrt_inject")
-        }
-    }) {
-        eachFile { path = "bin/avcrt_inject" }
-        includeEmptyDirs = false
-        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-    }
     into(binariesOutput)
+    includeEmptyDirs = false
+    duplicatesStrategy = DuplicatesStrategy.FAIL
+}
+
+afterEvaluate {
+    val releaseNativeOutput = tasks.named<ExternalNativeBuildTask>("externalNativeBuildRelease").flatMap { it.soFolder }
+    stageModuleBinaries.configure {
+        val payloads = mapOf(
+            "avcrtd" to "bin/avcrtd",
+            "libzygisk_avcrt.so" to "zygisk/arm64-v8a.so",
+            "libavcrt_afhook.so" to "system/lib64/libavcrt_afhook.so",
+            "avcrt_inject" to "bin/avcrt_inject",
+        )
+        for ((source, destination) in payloads) {
+            val binary = releaseNativeOutput.map { it.file("arm64-v8a/$source") }
+            // A single required input file: a missing output fails the build.
+            inputs.file(binary)
+            from(binary) { eachFile { path = destination } }
+        }
+    }
 }
 
 /**
@@ -186,6 +138,9 @@ fun Zip.configureModuleZip(fileName: String, withoutZygisk: Boolean, withAf: Boo
     dependsOn(writeModuleProp, stageModuleTemplate, stageModuleBinaries)
     archiveFileName.set(fileName)
     destinationDirectory.set(layout.buildDirectory.dir("outputs"))
+    isReproducibleFileOrder = true
+    isPreserveFileTimestamps = false
+    duplicatesStrategy = DuplicatesStrategy.FAIL
     inputs.property("withoutZygisk", withoutZygisk)
     inputs.property("withAf", withAf)
     from(templateOutput, binariesOutput, metadataOutput)
@@ -196,9 +151,10 @@ fun Zip.configureModuleZip(fileName: String, withoutZygisk: Boolean, withAf: Boo
 
     // Resolve rootProject refs at configuration time — only plain File objects
     // (which are serializable) are captured in the doLast action below.
-    val assetsDst = rootProject.file("app/src/main/assets/$fileName")
+    val assetsDst = if (fileName == "avcrt-module-af-experimental.zip") null
+        else rootProject.file("app/src/main/assets/$fileName")
     val rootDir = rootProject.projectDir
-    outputs.file(assetsDst)
+    assetsDst?.let { outputs.file(it) }
 
     doLast {
         val src = archiveFile.get().asFile
@@ -208,18 +164,25 @@ fun Zip.configureModuleZip(fileName: String, withoutZygisk: Boolean, withAf: Boo
             }
             val hasZygisk = zip.entries().asSequence().any { it.name == "zygisk" || it.name.startsWith("zygisk/") }
             check(hasZygisk != withoutZygisk) { "Unexpected Zygisk contents in $fileName" }
+            for (entry in listOf("system/lib64/libavcrt_afhook.so", "bin/avcrt_inject", "sepolicy.rule")) {
+                check((zip.getEntry(entry)?.isDirectory == false) == withAf) {
+                    "Unexpected presence or absence of $entry in $fileName"
+                }
+            }
             if (!withoutZygisk) {
-                check(zip.entries().asSequence().any { !it.isDirectory && it.name.startsWith("zygisk/") && it.name.endsWith(".so") }) {
+                check(zip.getEntry("zygisk/arm64-v8a.so")?.isDirectory == false) {
                     "$fileName is missing the Zygisk library"
                 }
             }
         }
-        assetsDst.parentFile.mkdirs()
-        src.copyTo(assetsDst, overwrite = true)
+        if (assetsDst != null) {
+            assetsDst.parentFile.mkdirs()
+            src.copyTo(assetsDst, overwrite = true)
+        }
         val sha = MessageDigest.getInstance("SHA-256").digest(src.readBytes())
             .joinToString("") { "%02x".format(it) }
         logger.lifecycle(
-            "Bundled KSU module -> ${assetsDst.relativeTo(rootDir)} (sha256: ${sha.take(16)}…)",
+            "Bundled KSU module -> ${(assetsDst ?: src).relativeTo(rootDir)} (sha256: ${sha.take(16)}…)",
         )
     }
 }
@@ -228,10 +191,40 @@ val bundleCellularModuleZip by tasks.registering(Zip::class) {
     configureModuleZip("avcrt-module-cellular.zip", withoutZygisk = true)
 }
 
+val bundleExperimentalAfModuleZip by tasks.registering(Zip::class) {
+    configureModuleZip("avcrt-module-af-experimental.zip", withoutZygisk = true, withAf = true)
+}
+
+// Standalone manual diagnostic; never staged into the AVCRT APK or module.
+val stagefrightSource = rootProject.layout.projectDirectory.file("tools/capture-probe/stagefright_breakpoint.c")
+val stagefrightCounter = layout.buildDirectory.file("stagefright-probe/avcrt-stagefright-counter")
+val stagefrightCompiler = androidComponents.sdkComponents.sdkDirectory.map {
+    it.file("ndk/${libs.versions.androidNdk.get()}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang")
+}
+val compileStagefrightCounter by tasks.registering(Exec::class) {
+    inputs.files(stagefrightSource, stagefrightCompiler)
+    outputs.file(stagefrightCounter)
+    val output = stagefrightCounter.get().asFile
+    commandLine(stagefrightCompiler.get().asFile, "-O2", "-Wall", "-Wextra", "-Werror",
+        stagefrightSource.asFile, "-o", output)
+    doFirst { output.parentFile.mkdirs() }
+}
+
+val bundleExperimentalStagefrightModuleZip by tasks.registering(Zip::class) {
+    dependsOn(compileStagefrightCounter)
+    archiveFileName.set("avcrt-module-stagefright-probe.zip")
+    destinationDirectory.set(layout.buildDirectory.dir("outputs"))
+    from("src/stagefright-probe/module")
+    from(stagefrightCounter) { into("bin") }
+    doLast {
+        ZipFile(archiveFile.get().asFile).use { zip ->
+            val files = zip.entries().asSequence().filterNot { it.isDirectory }.map { it.name }.toSet()
+            check(files == setOf("module.prop", "customize.sh", "bin/avcrt-stagefright-counter"))
+        }
+    }
+}
+
 val bundleModuleZip by tasks.registering(Zip::class) {
     dependsOn(bundleCellularModuleZip)
-    val noZygisk = cellularOnly.get()
-    val af = experimentalAf.get()
-    require(!af || noZygisk) { "Experimental AudioFlinger and Zygisk must be tested in separate packages" }
-    configureModuleZip("avcrt-module.zip", withoutZygisk = noZygisk, withAf = af)
+    configureModuleZip("avcrt-module.zip", withoutZygisk = cellularOnly.get(), withAf = !cellularOnly.get())
 }

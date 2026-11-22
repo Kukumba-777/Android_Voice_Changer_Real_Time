@@ -15,6 +15,8 @@ mkdir -p "$DATA"; chmod 0755 "$DATA"
 [ -f "$DATA/engine_state" ] || { echo off > "$DATA/engine_state"; chmod 0644 "$DATA/engine_state"; }
 rm -f /data/adb/avcrt_install_pending 2>/dev/null
 
+# The AF claim is non-persistent; only an installed hook publishes it.
+
 # safety: clear any stale codec mute from an unclean shutdown
 "$MODDIR/bin/avcrtd" --unmute >/dev/null 2>&1 &
 

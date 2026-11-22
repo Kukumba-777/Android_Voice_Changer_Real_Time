@@ -29,6 +29,7 @@
 #include <fcntl.h>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <sys/system_properties.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
@@ -36,10 +37,13 @@
 
 #include "avcrt_engine.h"
 #include "avcrt_config.h"
+#include "avcrt_capture_probe.h"
+#include "avcrt_codec_mixer.h"
 
 using avcrt::ConfigStore;
 using avcrt::DspConfig;
 using avcrt::Engine;
+namespace codec = avcrt::codec_mixer;
 
 namespace {
 
@@ -199,8 +203,14 @@ void resolve_cards() {
     }
     g_cap_device = card >= 0 ? find_pcm(card, "MultiMedia1", true) : -1;
     g_inj_device = card >= 0 ? find_pcm(card, "MultiMedia9", false) : -1;
+    const bool old_patch = g_patch_present;
+    const bool old_cvp = g_cvp_rebuild_present;
     g_patch_present = g_mixer && mixer_get_ctl_by_name(g_mixer, kDecMuteCtl);
     g_cvp_rebuild_present = g_mixer && mixer_get_ctl_by_name(g_mixer, kCvpRebuildCtl);
+    if (g_mixer && (old_patch != g_patch_present || old_cvp != g_cvp_rebuild_present)) {
+        fprintf(stderr, "[avcrtd] cellular controls: AVCRT Dec Mute=%s AVCRT CVP Rebuild=%s\n",
+                g_patch_present ? "present" : "absent", g_cvp_rebuild_present ? "present" : "absent");
+    }
     g_usb_card = find_usb_card();
     if (g_usb_card == g_card) g_usb_card = -1;
     g_usb_cap_device = g_usb_card >= 0 ? find_pcm(g_usb_card, nullptr, true) : -1;
@@ -450,11 +460,23 @@ pcm_config make_usb_cfg() {
 
 // ---- engage / disengage ----------------------------------------------------
 
-struct MixerEdit {
-    std::string name;
-    int before;
-    int written;
-    bool spare;
+struct CodecControl {
+    explicit CodecControl(const char* name) : ctl(g_mixer ? mixer_get_ctl_by_name(g_mixer, name) : nullptr) {}
+    codec::Kind kind() const {
+        if (ctl) {
+            const auto type = mixer_ctl_get_type(ctl);
+            if (type == MIXER_CTL_TYPE_BOOL) return codec::Kind::Switch;
+            if (type == MIXER_CTL_TYPE_ENUM) return codec::Kind::Enum;
+        }
+        return codec::Kind::Unsupported;
+    }
+    unsigned count() const { return ctl ? mixer_ctl_get_num_values(ctl) : 0; }
+    unsigned enums() const { return ctl ? mixer_ctl_get_num_enums(ctl) : 0; }
+    int get(unsigned index) const { return ctl ? mixer_ctl_get_value(ctl, index) : -1; }
+    bool set(unsigned index, int value) const {
+        return ctl && mixer_ctl_set_value(ctl, index, value) == 0;
+    }
+    mixer_ctl* ctl;
 };
 
 struct Session {
@@ -488,7 +510,7 @@ struct Session {
     bool inject_touched = false;
     bool mute_touched = false;
     bool  engaged = false;
-    std::vector<MixerEdit> codec_edits;
+    std::vector<codec::Edit> codec_edits;
 };
 
 const char* kCapFromTx4 = "MultiMedia1 Mixer TX_CDC_DMA_TX_4";
@@ -496,50 +518,65 @@ const char* kCapFromTx3 = "MultiMedia1 Mixer TX_CDC_DMA_TX_3";
 bool g_mute_clear_pending = false;
 bool g_codec_rollback_failed = false;
 
-bool codec_write(Session& s, const char* name, int value, bool spare = false) {
-    mixer_ctl* ctl = mixer_get_ctl_by_name(g_mixer, name);
-    if (!ctl || mixer_ctl_get_num_values(ctl) != 1 || value < 0) return false;
-    const int before = mixer_ctl_get_value(ctl, 0);
-    if (before < 0) return false;
-    if (before == value) return true;
-    s.codec_edits.push_back({name, before, value, spare});
-    return mx_set(name, value);
+bool codec_write(Session& s, const CodecControl& ctl, const char* name, int value, bool spare = false) {
+    if (codec::write(ctl, s.codec_edits, name, value, spare)) return true;
+    fprintf(stderr, "[avcrtd] gsm mixer: rejected '%s' (%u values)\n", name, ctl.count());
+    return false;
+}
+
+bool codec_switch(Session& s, const char* name, bool spare = false) {
+    CodecControl ctl(name);
+    return ctl.kind() == codec::Kind::Switch && codec_write(s, ctl, name, 1, spare);
 }
 
 bool codec_enum(Session& s, const char* name, const char* value) {
-    mixer_ctl* ctl = mixer_get_ctl_by_name(g_mixer, name);
-    if (!ctl || mixer_ctl_get_type(ctl) != MIXER_CTL_TYPE_ENUM) return false;
-    for (unsigned i = 0; i < mixer_ctl_get_num_enums(ctl); ++i) {
-        const char* item = mixer_ctl_get_enum_string(ctl, i);
-        if (item && !strcmp(item, value)) return codec_write(s, name, i, true);
+    CodecControl ctl(name);
+    if (ctl.kind() != codec::Kind::Enum) return false;
+    for (unsigned i = 0; i < ctl.enums(); ++i) {
+        const char* item = mixer_ctl_get_enum_string(ctl.ctl, i);
+        if (item && !strcmp(item, value)) return codec_write(s, ctl, name, i, true);
     }
     return false;
+}
+
+bool codec_route_matches(const Session& s) {
+    if (s.codec_edits.empty() || !codec::off(CodecControl(s.spare_aif1))) return false;
+    const char* other_dma = s.modem_aif == 1 ? kCapFromTx3 : kCapFromTx4;
+    if (!codec::off(CodecControl(other_dma)) ||
+        decs_in_aif(s.modem_aif == 1 ? 2 : 1) != (1 << s.spare_dec)) return false;
+    for (const auto& edit : s.codec_edits) {
+        if (!codec::matches(CodecControl(edit.name.c_str()), edit)) return false;
+    }
+    return true;
 }
 
 void rollback_codec(Session& s) {
     // If HAL has changed the spare's source or routed it into another AIF, do not
     // put our old mux state back over the new route. These are value checks, not ALSA locks.
     MicSrc live = discover_mic_source(s.spare_dec);
-    const bool attached = mx_get(s.spare_aif) != 0;
-    const bool reused = mx_get(s.spare_aif1) != 0 || (attached && (!live.valid ||
+    const bool attached = !codec::off(CodecControl(s.spare_aif));
+    const bool reused = !codec::off(CodecControl(s.spare_aif1)) || (attached && (!live.valid ||
         strcmp(live.dec_mux, s.mic.dec_mux) || strcmp(live.sub_mux, s.mic.sub_mux)));
     int session = 0, aif = 0;
     const bool sole_uplink = attached && is_in_call() && discover_codec_uplink(session, aif) &&
         aif != s.modem_aif && decs_in_aif(aif) == (1 << s.spare_dec);
     for (auto it = s.codec_edits.rbegin(); it != s.codec_edits.rend(); ++it) {
+        if (it->before == it->written) continue;
         const char* name = it->name.c_str();
-        const int live_value = mx_get(name);
         if (it->spare && (reused || sole_uplink)) {
             g_codec_rollback_failed = true;
-            fprintf(stderr, "[avcrtd] gsm rollback: spare ownership ambiguous for '%s'; leaving it to HAL\n", name);
+            fprintf(stderr, "[avcrtd] gsm rollback: spare ownership ambiguous for '%s'[%u]; leaving it to HAL\n",
+                    name, it->index);
             continue;
         }
-        if (live_value < 0 || (live_value == it->written && !mx_set(name, it->before))) {
+        const auto restored = codec::restore(CodecControl(name), *it);
+        if (restored == codec::Restore::Failed) {
             g_codec_rollback_failed = true;
-            fprintf(stderr, "[avcrtd] gsm rollback: cannot restore '%s'; cellular processing suspended\n", name);
+            fprintf(stderr, "[avcrtd] gsm rollback: cannot restore '%s'[%u]; cellular processing suspended\n",
+                    name, it->index);
             if (it->spare) break;  // Don't change a source if its edge couldn't be detached.
-        } else if (live_value == it->written) {
-            fprintf(stderr, "[avcrtd] gsm rollback: restored '%s'\n", name);
+        } else if (restored == codec::Restore::Restored) {
+            fprintf(stderr, "[avcrtd] gsm rollback: restored '%s'[%u]\n", name, it->index);
         }
     }
 }
@@ -639,10 +676,11 @@ bool engage(Session& s, int session) {
     //    routed to the free AIF/DMA and discovered capture PCM. It must feed ONLY our capture leg, NEVER
     //    the modem leg (else the real voice leaks to the modem AND we pitch it = ADDITIVE).
     const char* source_ctl = strcmp(s.mic.dec_mux, "SWR_MIC") == 0 ? s.spare_smic_mux : s.spare_dmic_mux;
-    if (decs_in_aif(cap_aif) || mx_get(s.spare_aif1) != 0 || mx_get(s.spare_aif) != 0 ||
-        mx_get(off_dma) != 0 || mx_get(cap_dma) != 0 || mx_get(s.inj_mixer) != 0) return false;
+    if (decs_in_aif(cap_aif) || !codec::off(CodecControl(s.spare_aif1)) || !codec::off(CodecControl(s.spare_aif)) ||
+        !codec::off(CodecControl(off_dma)) || !codec::off(CodecControl(cap_dma)) ||
+        !codec::off(CodecControl(s.inj_mixer))) return false;
     if (!codec_enum(s, s.spare_dec_mux, s.mic.dec_mux) || !codec_enum(s, source_ctl, s.mic.sub_mux) ||
-        !codec_write(s, s.spare_aif, 1, true) || !codec_write(s, cap_dma, 1)) return false;
+        !codec_switch(s, s.spare_aif, true) || !codec_switch(s, cap_dma)) return false;
 
     pcm_config ccfg = make_cfg(), icfg = make_cfg();
     s.cap = pcm_open(g_card, g_cap_device, PCM_IN, &ccfg);
@@ -656,13 +694,13 @@ bool engage(Session& s, int session) {
                 session, pcm_get_error(s.cap));
         return false;
     }
-    if (!codec_write(s, s.inj_mixer, 1)) return false;
+    if (!codec_switch(s, s.inj_mixer)) return false;
     s.inj = pcm_open(g_card, g_inj_device, PCM_OUT, &icfg);
     if (!s.inj || !pcm_is_ready(s.inj) || !prime_inject(s)) return false;
     int live_session = 0, live_aif = 0;
     if (!g_run.load() || !is_in_call() || find_usb_card() >= 0 ||
         !discover_codec_uplink(live_session, live_aif) || live_session != session ||
-        live_aif != aif || decs_in_aif(aif) != s.modem_mask) {
+        live_aif != aif || decs_in_aif(aif) != s.modem_mask || !codec_route_matches(s)) {
         fprintf(stderr, "[avcrtd] gsm codec route changed during prime — abort before mute\n");
         return false;
     }
@@ -984,6 +1022,7 @@ AccCheck check_accessory(const Session& s) {
         MicSrc mic = discover_mic_source(__builtin_ctz((unsigned)dmask));
         if (!mic.valid) return ACC_UNKNOWN;
         if (strcmp(mic.dec_mux, s.mic.dec_mux) || strcmp(mic.sub_mux, s.mic.sub_mux)) return ACC_CHANGED;
+        if (!codec_route_matches(s)) return ACC_CHANGED;
     }
     return ACC_SAME;
 }
@@ -1059,18 +1098,15 @@ int run_probe_cvp() {
 
 // ---- afhook auto-injection (the universal AudioFlinger-level voice hook) -----
 //
-// The afhook .so (libavcrt_afhook.so) pitches EVERY mic capture that flows through
-// AudioFlinger's RecordThread — apps, mediaserver, the camera — at the HAL read.
+// The legacy afhook can process eligible PCM reaching its guarded HAL read entry.
+// This is a shared stream, not a per-track selection or universal capture path.
 // It can't load itself: it must be ptrace-injected into the audioserver process (a
 // non-zygote init service). We drive that here, in the already-root, auto-supervised
 // daemon. Packaging keeps this experimental path separate from Zygisk. A mapped
 // payload does not establish that an inline hook was installed or processes audio.
 //
-// SAFETY (this runs on a daily driver): if our injected hook were to crash audioserver,
-// it would respawn and we'd re-inject → an audio bootloop. So we DISABLE afhook
-// after a few quick post-inject
-// restarts, leaving audioserver clean. The inject itself is isolated in a short-lived
-// child process (the avcrt_inject binary), so a ptrace glitch can't take down avcrtd.
+// Allow only one attempt per boot, even if audioserver or avcrtd restarts. This
+// avoids repeatedly attaching to a replacement audioserver after a crash.
 
 pid_t pidof_one(const char* name) {
     char cmd[96];
@@ -1095,6 +1131,40 @@ bool afhook_in_maps(pid_t pid) {
     }
     fclose(f);
     return found;
+}
+
+// Query the versioned, dump-permission-gated source-ROM contract. On stock
+// builds an unknown argument may return a full dump; don't collect it.
+bool source_capture_contract_observed(pid_t pid) {
+    if (pid <= 0) return false;
+    FILE* p = popen("/system/bin/dumpsys -t 3 media.audio_flinger --avcrt-capture-contract 2>/dev/null", "r");
+    if (!p) return false;
+    char reply[avcrt::capture_probe::kPerTrackV1.size() + 1];
+    const size_t size = fread(reply, 1, sizeof(reply), p);
+    const bool complete = feof(p) && !ferror(p);
+    const int status = pclose(p);
+    return avcrt::capture_probe::source_contract_observed({reply, size},
+            complete && status == 0, pid == pidof_one("audioserver"));
+}
+
+// Diagnostics only. Never start the routing daemon, attach to audioserver,
+// change backend state, or interpret a contract marker as processed PCM.
+int run_probe_capture() {
+    const pid_t pid = pidof_one("audioserver");
+    const auto is_one = [](const char* key) {
+        char value[PROP_VALUE_MAX]{};
+        return __system_property_get(key, value) == 1 && value[0] == '1';
+    };
+    const bool legacy = pid > 0 && afhook_in_maps(pid);
+    const bool source = source_capture_contract_observed(pid);
+    const bool optedIn = is_one("ro.debuggable") && is_one("debug.avcrt.af_capture");
+    printf("audioserver_pid=%d\nlegacy_payload_observed=%s\n"
+           "source_opt_in=%s\nsource_contract=%s\naudioflinger_advice=%s\n"
+           "pcm_processing=unverified\n",
+           pid, legacy ? "yes" : "not_observed", optedIn ? "on" : "off",
+           source ? "per_track_pcm_v1" : "not_observed",
+           avcrt::capture_probe::audioflinger_advice(source, optedIn, legacy));
+    return 0;
 }
 
 // Run the avcrt_inject helper (sibling of this binary) in a child process. Returns 0
@@ -1123,87 +1193,65 @@ int run_injector(pid_t target, const char* payload) {
     return (WIFEXITED(st) && WEXITSTATUS(st) == 0) ? 0 : 1;
 }
 
+// Record the attempt before launching the helper. Lock the marker separately
+// so a missing daemon instance lock cannot admit two attempts.
+bool claim_af_boot_attempt() {
+    char boot[64]{};
+    FILE* id = fopen("/proc/sys/kernel/random/boot_id", "re");
+    if (!id) return false;
+    const bool valid = fgets(boot, sizeof(boot), id) && strlen(boot) == 37 && boot[36] == '\n';
+    fclose(id);
+    if (!valid) return false;
+
+    const int fd = open("/data/adb/avcrt_af_attempt_boot", O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd < 0) return false;
+    struct stat st{};
+    if (flock(fd, LOCK_EX | LOCK_NB) != 0 || fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        close(fd);
+        return false;
+    }
+    char previous[sizeof(boot)]{};
+    const ssize_t n = read(fd, previous, sizeof(previous));
+    const bool claimed = n >= 0 && (n == 0 || (n == 37 && previous[36] == '\n')) &&
+                         strcmp(boot, previous) != 0 &&
+                         pwrite(fd, boot, 37, 0) == 37 && fsync(fd) == 0;
+    close(fd);
+    return claimed;
+}
+
 void* afhook_monitor(void*) {
     const char* payload = getenv("AVCRT_AF_PAYLOAD");
     if (!payload || payload[0] != '/') {
         fprintf(stderr, "[avcrtd] AudioFlinger: no unique module overlay payload; skipping\n");
         return nullptr;
     }
-    pid_t  last_injected = 0;
-    time_t last_inject_t = 0;
-    int    strikes       = 0;       // quick post-inject restarts (suspected hook crash)
-    bool   disabled      = false;
-    pid_t  attempt_pid   = 0;
-    pid_t  observed_pid  = 0;
-    int    attempts      = 0;
-    const int kCrashWindowSec = 12; // a restart within this of our inject = suspect us
-    const int kMaxStrikes     = 3;
-    const int kMaxAttemptsPerPid = 3;
-
     while (g_run.load()) {
-        if (disabled) { for (int i = 0; i < 10 && g_run.load(); ++i) sleep_ms(500); continue; }
-
-        pid_t as = pidof_one("audioserver");
-        if (as == 0) { sleep_ms(1000); continue; }                  // not up yet
-
-        // ALREADY injected (by us, or a previous avcrtd instance the supervisor respawned
-        // over)? Adopt it — re-injecting a second copy would inline-hook the already-patched
-        // prologue and corrupt it. This is the steady state.
-        if (afhook_in_maps(as)) {
-            observed_pid = as;
-            if (as != last_injected) {
-                last_injected = as;
-                if (last_inject_t == 0) last_inject_t = time(nullptr);
-            }
-            sleep_ms(2000);
-            continue;
-        }
-
-        // audioserver is NEW and NOT injected (boot, or a restart that dropped our hook).
-        time_t now = time(nullptr);
-        const bool new_pid = as != observed_pid;
-        if (new_pid) observed_pid = as;
-        if (new_pid && as != last_injected && last_inject_t != 0 && now - last_inject_t < kCrashWindowSec) {
-            // it respawned right after we injected → our hook likely crashed it.
-            if (++strikes >= kMaxStrikes) {
-                fprintf(stderr, "[avcrtd] afhook: audioserver restarted %d× shortly after inject — "
-                                "DISABLING afhook (audio left clean)\n", strikes);
-                disabled = true;
-                continue;
-            }
-        } else if (new_pid && as != last_injected) {
-            strikes = 0;   // healthy/independent restart
-        }
-
-        sleep_ms(1500);   // let audioserver finish initializing
+        const pid_t as = pidof_one("audioserver");
+        sleep_ms(1500);
         if (!g_run.load()) break;
-        as = pidof_one("audioserver");
-        if (as == 0) continue;
-        if (as != attempt_pid) { attempt_pid = as; attempts = 0; }
-        if (attempts >= kMaxAttemptsPerPid) { sleep_ms(2000); continue; }
+        if (as == 0 || as != pidof_one("audioserver")) continue;
+        if (afhook_in_maps(as)) {
+            fprintf(stderr, "[avcrtd] AudioFlinger payload already mapped in pid=%d; not attaching\n", as);
+            break;
+        }
         const std::string target_path = "/proc/" + std::to_string(as) + "/root" + payload;
         struct stat st{};
         if (stat(target_path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
-            attempts = kMaxAttemptsPerPid;
             fprintf(stderr, "[avcrtd] AudioFlinger: overlay not visible to pid=%d; skipping without attaching\n", as);
-            continue;
+            break;
         }
-        ++attempts;
-
-        if (run_injector(as, payload) == 0) {
-            sleep_ms(300);
-            if (afhook_in_maps(as)) {
-                observed_pid = as;
-                last_injected = as;
-                last_inject_t = time(nullptr);
-                fprintf(stderr, "[avcrtd] AudioFlinger payload mapped in pid=%d; see avcrtaf for hook status\n", as);
-                continue;
-            }
+        if (!claim_af_boot_attempt()) {
+            fprintf(stderr, "[avcrtd] AudioFlinger: boot attempt already used or marker unavailable; skipping\n");
+            break;
         }
-        fprintf(stderr, "[avcrtd] afhook load failed for pid=%d attempt=%d/%d%s\n",
-                as, attempts, kMaxAttemptsPerPid,
-                attempts == kMaxAttemptsPerPid ? " — waiting for new audioserver PID" : "");
-        sleep_ms(2000);
+        const int rc = run_injector(as, payload);
+        if (afhook_in_maps(as)) {
+            fprintf(stderr, "[avcrtd] AudioFlinger payload mapped in pid=%d; see avcrtaf for hook status\n", as);
+        } else {
+            fprintf(stderr, "[avcrtd] AudioFlinger payload not mapped in pid=%d (helper=%d); no retry this boot\n",
+                    as, rc);
+        }
+        break;
     }
     return nullptr;
 }
@@ -1296,13 +1344,14 @@ int main(int argc, char** argv) {
         if (strcmp(argv[1], "--probe-kcontrol") == 0) return run_probe_kcontrol();
         if (strcmp(argv[1], "--probe-cvp") == 0) return run_probe_cvp();
         if (strcmp(argv[1], "--probe-voice-card") == 0) return find_voice_card(true) >= 0 ? 0 : 1;
+        if (strcmp(argv[1], "--probe-capture") == 0) return run_probe_capture();
         if (strcmp(argv[1], "--list-probes") == 0) {
-            puts("--probe-kcontrol\n--probe-cvp\n--probe-voice-card");
+            puts("--probe-kcontrol\n--probe-cvp\n--probe-voice-card\n--probe-capture");
             return 0;
         }
     }
     if (argc != 1) {
-        fprintf(stderr, "Usage: %s [--unmute|--probe-kcontrol|--probe-cvp|--probe-voice-card|--list-probes]\n", argv[0]);
+        fprintf(stderr, "Usage: %s [--unmute|--probe-kcontrol|--probe-cvp|--probe-voice-card|--probe-capture|--list-probes]\n", argv[0]);
         return 2;
     }
 
@@ -1328,7 +1377,7 @@ int main(int argc, char** argv) {
     sigaction(SIGTERM, &sa, nullptr);
 
     resolve_cards();
-    if (!g_mixer) fprintf(stderr, "[avcrtd] cellular routing unavailable; app capture remains independent\n");
+    if (!g_mixer) fprintf(stderr, "[avcrtd] cellular mixer not discovered yet; controls not probed\n");
 
     // GATING (per-flow, NOT a hard cellular kill-switch):
     //  - BUILT-IN mic GSM clean-replace needs the "AVCRT Dec Mute" kcontrol (AVCRT kernel patch).
@@ -1336,10 +1385,10 @@ int main(int argc, char** argv) {
     //  - HEADSET (USB/adapter) GSM clean-replace needs NO patch (reroute to bolero + capture the freed
     //    headset mic + incall_music inject, all stock) → works on ANY kernel when a headset is on the call.
     // So the daemon RUNS regardless of the patch and engages whichever flow the live call supports.
-    fprintf(stderr, "[avcrtd] AVCRT Dec Mute %s; codec GSM %s; headset support requires route validation.\n",
+    if (g_mixer) fprintf(stderr, "[avcrtd] AVCRT Dec Mute %s; codec GSM %s; headset support requires route validation.\n",
             g_patch_present ? "present" : "ABSENT",
             g_patch_present ? "enabled" : "disabled (stock kernel)");
-    fprintf(stderr, "[avcrtd] CVP-rebuild kcontrol %s -> accessory recovery via %s.\n",
+    if (g_mixer) fprintf(stderr, "[avcrtd] CVP-rebuild kcontrol %s -> accessory recovery via %s.\n",
             g_cvp_rebuild_present ? "present" : "absent",
             g_cvp_rebuild_present ? "optional in-kernel request after route settles" : "rollback and settle only");
 

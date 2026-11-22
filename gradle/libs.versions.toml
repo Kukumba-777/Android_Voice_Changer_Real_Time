@@ -14,16 +14,16 @@ minSdk = "31"
 targetSdk = "34"
 
 # Versioning of the app
-versionCode = "2"
-versionName = "0.2.0-mvp"
+versionCode = "5"
+versionName = "0.3.2"
 
 # KSU module identity (also written into module.prop at build time)
 moduleId = "avcrt"
 moduleName = "AVCRT Voice Changer"
-moduleVersion = "0.3.0-cellular"
-moduleVersionCode = "3"
+moduleVersion = "0.4.6-af-claim-fix"
+moduleVersionCode = "10"
 moduleAuthor = "AVCRT"
-moduleDescription = "System-wide real-time voice changer: cellular GSM calls (patched kernel + daemon) and all apps (Zygisk)."
+moduleDescription = "Real-time voice DSP for compatible app capture via Zygisk, with a separate device-dependent cellular backend."
 
 # AndroidX
 androidxCore = "1.13.1"

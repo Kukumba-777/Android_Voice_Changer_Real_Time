@@ -5,6 +5,14 @@
 
 ui_print "  AVCRT — system-wide voice changer"
 [ ! -d "$MODPATH/zygisk" ] || ui_print "  • App capture: requires a compatible Zygisk runtime"
+if [ -f "$MODPATH/bin/avcrt_inject" ]; then
+    ui_print "  • Shared-HAL backend: selected only after successful runtime hook install"
+    ui_print "  • Zygisk app hooks remain as fallback when the shared backend is unavailable"
+    if [ "${KSU:-}" = true ] && [ -L /data/adb/metamodule ] && [ ! -d /data/adb/metamodule ]; then
+        ui_print "  ! KernelSU metamodule link points to a missing directory"
+        ui_print "  ! Keep the regular AVCRT ZIP until module mounting is restored"
+    fi
+fi
 ui_print "  • Cellular routing is experimental and requires a compatible audio route"
 ui_print "  • Built-in microphone replacement requires a matching AVCRT kernel patch"
 

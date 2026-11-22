@@ -8,5 +8,12 @@
 # /proc/self/mem, so no execmod is needed.)
 allow audioserver audioserver process execmem
 
+# The claim uses sys.audio.* (audio_prop). Do not allow writes to default_prop.
+# Magisk syntax separates the type and class with a space, not a colon.
+allow audioserver audio_prop property_service set
+allow { audioserver appdomain } audio_prop file { getattr open read map }
+# The same init-owned service PID must be visible to the AF and app hooks.
+allow { audioserver appdomain } init_svc_debug_prop file { getattr open read map }
+
 # avcrtd (u:r:magisk:s0) ptrace-attaches to audioserver to remote-dlopen the hook .so.
 allow magisk audioserver process ptrace

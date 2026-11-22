@@ -202,6 +202,18 @@ class HalEngine @Inject constructor(
         val mirrored = rootAccess.exec(
             buildString {
                 append("(failed=0; setprop() { command setprop \"\$@\" || failed=1; }; ")
+                // Only the opt-in source-built AudioFlinger reads this atomic core snapshot.
+                // Clear first so a failed write cannot leave the previous preset enabled.
+                append("if [ \"\$(getprop debug.avcrt.af_capture)\" = 1 ]; then ")
+                append("setprop debug.avcrt.af_config 0; ")
+                if (enabled) {
+                    append(
+                        "setprop debug.avcrt.af_config " +
+                            "'1,${d.pitchSemitones},${d.formantSemitones},${d.gainDb}," +
+                            "${b(d.preserveFormants)},${d.crispness}'; ",
+                    )
+                }
+                append("fi; ")
                 append("setprop ${AvcrtPaths.PROP_ENABLED} ${if (enabled) 1 else 0}; ")
                 append("setprop ${AvcrtPaths.PROP_PITCH} ${d.pitchSemitones}; ")
                 append("setprop ${AvcrtPaths.PROP_FORMANT} ${d.formantSemitones}; ")

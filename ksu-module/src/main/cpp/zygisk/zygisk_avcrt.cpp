@@ -4,18 +4,16 @@
 // libaudioclient/libaaudio and pitch-shifts the captured buffer in place via avcrt::Engine, at the
 // app's native rate/format — best quality (no codec round-trip, no cellular vocoder).
 //
-// TWO hooks for full capture-API coverage:
+// Optional native capture hooks, in addition to Java AudioRecord JNI:
 //   1. android::AudioRecord::obtainBuffer(Buffer*, const timespec*, ...) in libaudioclient — the
 //      ring-buffer access point that read() (MediaRecorder, voice messages, recorders) AND the
 //      internal AudioRecordThread callback path (Telegram VOIP via OpenSL) both funnel through.
-//      Covers Java AudioRecord + OpenSL ES + AAudio-LEGACY (shared mode goes through AudioRecord).
+//      Requires the supported private ABI and exported client PCM getters.
 //   2. AAudioStream_read in libaaudio — adds AAudio-MMAP-EXCLUSIVE capture, which bypasses
 //      android::AudioRecord entirely (direct shared-memory ring buffer with the HAL). A thread-local
 //      guard makes legacy-AAudio (which calls AudioRecord underneath) pitch ONCE, at the AAudio level.
 //
-// WHY our own inline hooker (zygisk/avcrt_inlinehook.h): shadowhook is dead on Android 16 and Dobby
-// doesn't compile for Android. Our hooker self-checks the prologue and gracefully SKIPS (never
-// crashes) on a target it can't safely patch — so it's portable across devices/ROMs.
+// Native entry points must pass the AArch64 prologue checks in avcrt_inlinehook.h.
 //
 // The active preset lives at active_preset.json which app processes cannot read (SELinux); the
 // app/daemon mirrors it to avcrt.dsp.* system properties (app-readable) as root, which we poll.
@@ -36,15 +34,24 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <vector>
 #include <type_traits>
 
+#include <aaudio/AAudio.h>
 #include <android/log.h>
+#include <STTypes.h>
 
 #include "avcrt_inlinehook.h"
 
 #include "avcrt_engine.h"
 #include "avcrt_config.h"   // DspConfig struct
+#include "avcrt_capture_contract.h"
+#include "avcrt_direct_aac.h"
+#include "avcrt_pcm24.h"
+#include "avcrt_recorder.h"
+#include "avcrt_stock_capture.h"
+#include "avcrt_af_backend.h"
 
 #define LOG_TAG "avcrtzy"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -69,50 +76,44 @@ struct WireConfig {
     DspConfig fx{};
 };
 
-// aaudio_format_t (NDK AAudio.h enum, sequential): I16=1, FLOAT=2, I24_PACKED=3, I32=4.
-constexpr int32_t kAAudioI16   = 1;
-constexpr int32_t kAAudioFloat = 2;
+namespace pcm = avcrt::capture_contract;
 
 // ---- hooked-function trampolines ----
 // status_t AudioRecord::obtainBuffer(Buffer*, const timespec* requested, timespec* elapsed,
 //   size_t* nonContig)  — x0=this,x1=Buffer*,x2..x4; returns status_t (0=NO_ERROR).
 using obtain_fn = int (*)(void * /*this*/, void * /*Buffer*/, const void *, void *, void *);
-obtain_fn orig_obtain = nullptr;
+std::atomic<obtain_fn> orig_obtain{nullptr};
 // int32_t AAudioStream_read(AAudioStream*, void* buffer, int32_t numFrames, int64_t timeoutNanos)
 //   — returns frames read (>=0) or a negative aaudio_result_t. (Blocking-mode AAudio capture.)
-using aaudio_read_fn = int32_t (*)(void * /*stream*/, void *, int32_t, int64_t);
-aaudio_read_fn orig_aaudio_read = nullptr;
+using aaudio_read_fn = decltype(&AAudioStream_read);
+std::atomic<aaudio_read_fn> orig_aaudio_read{nullptr};
 // void AAudioStreamBuilder_setDataCallback(builder, AAudioStream_dataCallback, void* userData) —
 // we wrap the app's data callback so CALLBACK-mode capture (incl. MMAP-exclusive, used by games) is
 // pitched too. The callback ABI: int32_t cb(stream, userData, audioData, numFrames).
-using aaudio_data_cb  = int32_t (*)(void * /*stream*/, void * /*userData*/, void * /*audioData*/, int32_t);
-using set_data_cb_fn  = void (*)(void * /*builder*/, void * /*callback*/, void * /*userData*/);
-set_data_cb_fn orig_set_data_cb = nullptr;
-constexpr int32_t kAAudioInput = 1;  // AAUDIO_DIRECTION_INPUT (OUTPUT=0, INPUT=1)
-struct CbCtx { aaudio_data_cb app_cb; void *app_ud; };
+using set_data_cb_fn = decltype(&AAudioStreamBuilder_setDataCallback);
+std::atomic<set_data_cb_fn> orig_set_data_cb{nullptr};
+struct CbCtx { AAudioStream_dataCallback app_cb; void *app_ud; };
 
-// AudioRecord::Buffer layout (stable for years): frameCount@0, size(bytes)@8, raw(union)@16.
-constexpr size_t kBufOffFrameCount = 0;
-constexpr size_t kBufOffSize       = 8;
-constexpr size_t kBufOffRaw        = 16;
+// Leading fields of the supported 64-bit AOSP AudioRecord::Buffer ABI. This
+// private layout is not a public guarantee; matching exports alone cannot prove it.
+struct AudioRecordBufferPrefix { size_t frames; size_t bytes; void* raw; };
 
 // ---- getters ----
 using getter_u32 = uint32_t (*)(const void *);
 using getter_i32 = int32_t  (*)(const void *);
-getter_u32 g_getHalSampleRate   = nullptr;
-getter_u32 g_getHalChannelCount = nullptr;
-getter_i32 g_getHalFormat       = nullptr;   // resolved but unused for format (see hooked_obtain)
-using aa_i32 = int32_t (*)(void *);
-aa_i32 g_aa_getFormat       = nullptr;
-aa_i32 g_aa_getChannelCount = nullptr;
-aa_i32 g_aa_getSampleRate   = nullptr;
-aa_i32 g_aa_getDirection    = nullptr;
+getter_u32 g_ar_rate = nullptr;
+getter_u32 g_ar_channels = nullptr;
+getter_i32 g_ar_format = nullptr;
+decltype(&AAudioStream_getFormat) g_aa_getFormat = nullptr;
+decltype(&AAudioStream_getChannelCount) g_aa_getChannelCount = nullptr;
+decltype(&AAudioStream_getSampleRate) g_aa_getSampleRate = nullptr;
+decltype(&AAudioStream_getDirection) g_aa_getDirection = nullptr;
 
 // Guard: legacy AAudio's AAudioStream_read internally calls AudioRecord (→ obtainBuffer). When set,
 // the obtainBuffer hook passes through so we pitch the capture exactly once (at the AAudio level).
 thread_local int g_in_aaudio = 0;
 thread_local bool g_in_java_read = false;
-// Per-callback-cycle flag: obtainBuffer sets it when it pitches (legacy callback-mode reads go
+// Per-callback-cycle flag: obtainBuffer sets it when it owns the samples (legacy callback-mode reads go
 // through AudioRecord). The data-callback wrapper consumes it: if set, the underlying obtainBuffer
 // already pitched → skip (don't double); if clear (MMAP path, no AudioRecord) → pitch here.
 thread_local bool g_obtained = false;
@@ -122,13 +123,7 @@ std::mutex          g_cfg_mu;
 WireConfig          g_cfg = {0, -1, 0, 0, 0, 1, 5};
 zygisk::Api        *g_api = nullptr;
 
-// When the universal audioserver-level hook (afhook) is active, it ALREADY pitches every capture that
-// flows through AudioFlinger's RecordThread (i.e. all AudioRecord/OpenSL/legacy-AAudio + mediaserver).
-// In that case this in-process Zygisk hook must NOT pitch the same buffer again (double-pitch). We keep
-// pitching ONLY the paths afhook physically can't see: AAudio-MMAP (exclusive/blocking) capture, which
-// bypasses RecordThread via a direct DMA buffer. g_obtained marks "this capture went through
-// android::AudioRecord (→ AudioFlinger → afhook already pitched it)" so we know what to skip.
-std::atomic<bool>   g_afhook_active{false};
+// Keep the app-process DSP separate from server/diagnostic backends.
 
 // per-capture-object pitch engines (keyed by AudioRecord* OR AAudioStream* — distinct pointers).
 struct StreamCtx {
@@ -146,12 +141,12 @@ std::mutex                    g_streams_mu;
 std::map<const void*, StreamCtx*> g_streams;
 
 double prop_d(const char *key, double def) {
-    char buf[48] = {0};
+    char buf[PROP_VALUE_MAX] = {0};
     if (__system_property_get(key, buf) <= 0) return def;
     return strtod(buf, nullptr);
 }
 int prop_i(const char *key, int def) {
-    char buf[48] = {0};
+    char buf[PROP_VALUE_MAX] = {0};
     if (__system_property_get(key, buf) <= 0) return def;
     return (int)strtol(buf, nullptr, 10);
 }
@@ -252,15 +247,14 @@ void refresh_config() {
     wc.gain     = prop_d("avcrt.dsp.gain", 0.0);
     wc.preserve_formants = prop_i("avcrt.dsp.preserve_formants", 1);
     wc.crispness = prop_i("avcrt.dsp.crispness", 5);
-    g_afhook_active.store(prop_i("avcrt.afhook.active", 0) != 0);
     parse_fx_props(wc.fx);
-    static int dbg = 0;
-    if (dbg < 3) { LOGI("cfg from props: enabled=%d rev=%d pitch=%.1f formant=%.1f gain=%.1f "
+    static std::atomic<unsigned> dbg{0};
+    if (dbg.load() < 3 && dbg.fetch_add(1) < 3) { LOGI("cfg from props: enabled=%d rev=%d pitch=%.1f formant=%.1f gain=%.1f "
                         "fx[gate=%d eq=%d ring=%d trem=%d dist=%d echo=%d verb=%d]",
                         wc.enabled, wc.revision, wc.pitch, wc.formant, wc.gain,
                         wc.fx.gate.enabled, wc.fx.eq.enabled, wc.fx.ringmod.enabled,
                         wc.fx.tremolo.enabled, wc.fx.distortion.enabled, wc.fx.echo.enabled,
-                        wc.fx.reverb.enabled); dbg++; }
+                         wc.fx.reverb.enabled); }
     std::lock_guard<std::mutex> lk(g_cfg_mu);
     g_cfg = wc;
 }
@@ -268,6 +262,13 @@ void refresh_config() {
 WireConfig current_config() {
     std::lock_guard<std::mutex> lk(g_cfg_mu);
     return g_cfg;
+}
+
+// Ownership is independent of the preset revision. Check it at the DSP gate
+// instead of leaving a stale app backend enabled until the next preset refresh.
+bool server_capture_active() {
+    return avcrt::af_backend::claimed() || prop_i("debug.avcrt.af_capture", 0) != 0 ||
+           prop_i("debug.avcrt.stagefright", 0) != 0;
 }
 
 // Re-read props when primed (revision<0), on a revision change, or every ~300 calls.
@@ -296,8 +297,7 @@ StreamCtx *ctx_for(const void *self, uint32_t rate, uint32_t channels) {
     return c;
 }
 
-void apply_cfg(StreamCtx *c, const WireConfig &cfg) {
-    if (c->applied_rev == cfg.revision) return;
+DspConfig engine_config(const WireConfig& cfg) {
     DspConfig dc = cfg.fx;            // carries the effect sub-structs (Phase 6)
     dc.enabled           = true;
     dc.pitch_semitones   = cfg.pitch;
@@ -307,6 +307,12 @@ void apply_cfg(StreamCtx *c, const WireConfig &cfg) {
     dc.preserve_formants = cfg.preserve_formants != 0;
     dc.crispness         = cfg.crispness;
     dc.revision          = cfg.revision;
+    return dc;
+}
+
+void apply_cfg(StreamCtx *c, const WireConfig &cfg) {
+    if (c->applied_rev == cfg.revision) return;
+    const auto dc = engine_config(cfg);
     c->engine->update(dc);
     c->applied_rev = cfg.revision;
 }
@@ -333,65 +339,40 @@ void process_pcm(StreamCtx *c, void *raw, size_t frames, uint32_t channels, int 
 
 // ===== Hook 1: android::AudioRecord::obtainBuffer =====
 int hooked_obtain(void *self, void *audioBuffer, const void *requested, void *elapsed, void *nonContig) {
-    int st = orig_obtain(self, audioBuffer, requested, elapsed, nonContig);
-    if (st != 0 || audioBuffer == nullptr) return st;   // data valid only on NO_ERROR(0)
-    // Mark that this capture went through android::AudioRecord — i.e. through AudioFlinger's RecordThread,
-    // where afhook (if active) already pitched it, and the path H3's data-callback wrapper must NOT
-    // re-pitch. Set unconditionally (even before the gates / under the AAudio guard) so it's an honest
-    // "this is an AudioFlinger-routed capture" marker.
-    g_obtained = true;
-    if (g_in_aaudio > 0 || g_in_java_read) return st;    // outer read owns this buffer
-    if (g_afhook_active.load()) return st;               // afhook already pitched it at the HAL read
-
-    uint8_t *b = static_cast<uint8_t *>(audioBuffer);
-    size_t frames = *reinterpret_cast<size_t *>(b + kBufOffFrameCount);
-    size_t bytes  = *reinterpret_cast<size_t *>(b + kBufOffSize);
-    void  *raw    = *reinterpret_cast<void **>(b + kBufOffRaw);
-    if (frames == 0 || raw == nullptr || bytes == 0) return st;
-
-    uint32_t rate     = g_getHalSampleRate   ? g_getHalSampleRate(self)   : 16000;
-    uint32_t channels = g_getHalChannelCount ? g_getHalChannelCount(self) : 1;
-    if (rate == 0) rate = 16000;
-    if (channels == 0) channels = 1;
-
-    // Client sample format from the buffer itself: frame_size = size/frameCount, bps = frame_size/ch.
-    // getHalChannelCount is the channel disambiguator (client ch == HAL ch in ~all mic cases); a rare
-    // channel mismatch yields bps∉{2,4} → safe passthrough (no crash, no garbage).
-    if (bytes % frames != 0) return st;
-    size_t frame_size = bytes / frames;
-    if (frame_size == 0 || frame_size % channels != 0) return st;
-    size_t bps = frame_size / channels;
-
-    static int dbg = 0;
-    if (dbg < 5) {
-        WireConfig c = current_config();
-        LOGI("obtain FIRED frames=%zu bytes=%zu frameSz=%zu bps=%zu rate=%u ch=%u en=%d rev=%d",
-             frames, bytes, frame_size, bps, rate, channels, c.enabled, c.revision);
-        dbg++;
-    }
-
+    const int st = orig_obtain.load()(self, audioBuffer, requested, elapsed, nonContig);
+    if (st != 0 || !audioBuffer || g_in_aaudio > 0 || g_in_java_read) return st;
     maybe_refresh_config();
     WireConfig cfg = current_config();
-    if (!cfg.enabled) return st;
-    if (bps != 2 && bps != 4) return st;
+    if (!cfg.enabled || server_capture_active()) return st;
 
+    AudioRecordBufferPrefix buffer{};
+    std::memcpy(&buffer, audioBuffer, sizeof(buffer));
+    const auto rate = g_ar_rate(self);
+    const auto channels = g_ar_channels(self);
+    const auto sample = pcm::audio_record_sample(g_ar_format(self));
+    const auto span = pcm::audio_record_span(buffer.raw, buffer.frames, buffer.bytes, rate,
+                                             channels, sample, SOUNDTOUCH_MAX_CHANNELS);
+    if (!span.bytes) return st;
+    const auto frame_size = span.frame_bytes;
     StreamCtx *c = ctx_for(self, rate, channels);
     apply_cfg(c, cfg);
 
     // De-overlap: obtainBuffer re-returns the unconsumed tail of a prior chunk (obtain 960, consume
     // 192, release 192, re-obtain 768, …) — pitching the whole chunk each time re-pitches the overlap
     // 2–5× → "wind". Pitch only frames past the previously-processed end.
-    uintptr_t start = reinterpret_cast<uintptr_t>(raw);
-    uintptr_t end   = start + static_cast<uintptr_t>(frames) * frame_size;
+    uintptr_t start = reinterpret_cast<uintptr_t>(buffer.raw);
+    uintptr_t end   = start + span.bytes;
     uintptr_t proc  = start;
     if (start >= c->last_raw && start < c->last_end) {
         proc = (c->last_end < end) ? c->last_end : end;  // skip already-pitched prefix
     }
+    if ((proc - start) % frame_size) return st;
     c->last_raw = start;
     c->last_end = end;
+    g_obtained = true; // The legacy callback must not process the same samples again.
     if (proc >= end) return st;
     size_t proc_frames = static_cast<size_t>(end - proc) / frame_size;
-    process_pcm(c, reinterpret_cast<void *>(proc), proc_frames, channels, static_cast<int>(bps));
+    process_pcm(c, reinterpret_cast<void *>(proc), proc_frames, channels, pcm::sample_bytes(sample));
     return st;
 }
 
@@ -410,6 +391,19 @@ struct JavaReadScope {
     ~JavaReadScope() { g_in_java_read = previous; }
 };
 
+jint recorder_read(JNIEnv* env, jobject self, jmethodID method, jshortArray buf, jint count) {
+    JavaReadScope scope;
+    return env->CallIntMethod(self, method, buf, 0, count, 1); // AudioRecord.READ_NON_BLOCKING.
+}
+
+bool stock_aac_config(DspConfig& result) {
+    if (!avcrt::stock_capture::aac_allowed()) return false;
+    maybe_refresh_config();
+    const auto cfg = current_config();
+    result = engine_config(cfg);
+    return cfg.enabled != 0;
+}
+
 struct JavaStream {
     jweak owner = nullptr;
     StreamCtx ctx;
@@ -423,16 +417,19 @@ void process_java(JNIEnv* env, jobject self, size_t samples, int bps, Process pr
     if (env->ExceptionCheck() || !samples || g_in_java_read) return;
     maybe_refresh_config();
     auto cfg = current_config();
-    if (!cfg.enabled || g_afhook_active.load()) return;
+    if (!cfg.enabled || server_capture_active()) return;
     const jint rate = env->CallIntMethod(self, java_rate);
     if (env->ExceptionCheck()) { env->ExceptionClear(); return; }
     const jint channels = env->CallIntMethod(self, java_channels);
     if (env->ExceptionCheck()) { env->ExceptionClear(); return; }
     const jint format = env->CallIntMethod(self, java_format);
     if (env->ExceptionCheck()) { env->ExceptionClear(); return; }
-    // android.media.AudioFormat: ENCODING_PCM_16BIT and ENCODING_PCM_FLOAT.
-    if (rate <= 0 || channels <= 0 || samples % channels ||
-        (bps == 2 ? format != 2 : format != 4)) return;
+    // android.media.AudioFormat: ENCODING_PCM_16BIT, ENCODING_PCM_FLOAT,
+    // and ENCODING_PCM_24BIT_PACKED (21). Packed PCM24 is handled below by
+    // converting complete signed little-endian 24-bit samples through the
+    // engine's native S16 interface; other encodings remain untouched.
+    if (!pcm::supported_dimensions(rate, channels, SOUNDTOUCH_MAX_CHANNELS) || samples % channels ||
+        (bps == 2 ? format != 2 : bps == 3 ? format != 21 : bps != 4 || format != 4)) return;
     std::lock_guard<std::mutex> lock(java_mu);
     JavaStream* stream = nullptr;
     for (auto it = java_streams.begin(); it != java_streams.end();) {
@@ -472,14 +469,18 @@ void process_java(JNIEnv* env, jobject self, size_t samples, int bps, Process pr
 
 template <typename Array>
 jint hooked_java_read(JNIEnv* env, jobject self, Array array, jint offset, jint count, jboolean blocking) {
+    if (!orig_java_read<Array>) return -3; // No valid original; never recurse into this wrapper.
     jint got;
     { JavaReadScope scope; got = orig_java_read<Array>(env, self, array, offset, count, blocking); }
     if (env->ExceptionCheck() || !array || got <= 0 || offset < 0 || got > count ||
         offset > env->GetArrayLength(array) - got) return got;
     constexpr bool bytes = std::is_same_v<Array, jbyteArray>;
     constexpr bool floats = std::is_same_v<Array, jfloatArray>;
-    if (bytes && got % 2) return got;
-    process_java(env, self, bytes ? got / 2 : got, floats ? 4 : 2,
+    const jint format = env->CallIntMethod(self, java_format);
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return got; }
+    const int bps = floats ? 4 : bytes ? (format == 21 ? 3 : 2) : 2;
+    if ((bytes && got % bps) || (!bytes && format == 21)) return got;
+    process_java(env, self, bytes ? got / bps : got, bps,
         [&](StreamCtx* ctx, size_t frames, unsigned channels) {
             // Work on a copy, not a pinned Java array or an unaligned byte-array offset.
             if constexpr (floats) {
@@ -488,14 +489,34 @@ jint hooked_java_read(JNIEnv* env, jobject self, Array array, jint offset, jint 
                 if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
                 process_pcm(ctx, data.data(), frames, channels, 4);
                 env->SetFloatArrayRegion(array, offset, got, data.data());
+            } else if constexpr (bytes) {
+                if (bps == 3) {
+                    std::vector<jbyte> packed(got);
+                    env->GetByteArrayRegion(array, offset, got, packed.data());
+                    if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
+                    std::vector<jshort> data(got / 3);
+                    for (size_t i = 0; i < data.size(); ++i) {
+                        data[i] = avcrt::pcm24_to_s16(
+                            reinterpret_cast<const uint8_t*>(packed.data() + i * 3));
+                    }
+                    ctx->engine->process(data.data(), frames);
+                    for (size_t i = 0; i < data.size(); ++i) {
+                        avcrt::s16_to_pcm24(data[i], reinterpret_cast<uint8_t*>(packed.data() + i * 3));
+                    }
+                    env->SetByteArrayRegion(array, offset, got, packed.data());
+                } else {
+                    std::vector<jshort> data(got / 2);
+                    env->GetByteArrayRegion(array, offset, got, reinterpret_cast<jbyte*>(data.data()));
+                    if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
+                    process_pcm(ctx, data.data(), frames, channels, 2);
+                    env->SetByteArrayRegion(array, offset, got, reinterpret_cast<jbyte*>(data.data()));
+                }
             } else {
-                std::vector<jshort> data(bytes ? got / 2 : got);
-                if constexpr (bytes) env->GetByteArrayRegion(array, offset, got, reinterpret_cast<jbyte*>(data.data()));
-                else env->GetShortArrayRegion(array, offset, got, data.data());
+                std::vector<jshort> data(got);
+                env->GetShortArrayRegion(array, offset, got, data.data());
                 if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
                 process_pcm(ctx, data.data(), frames, channels, 2);
-                if constexpr (bytes) env->SetByteArrayRegion(array, offset, got, reinterpret_cast<jbyte*>(data.data()));
-                else env->SetShortArrayRegion(array, offset, got, data.data());
+                env->SetShortArrayRegion(array, offset, got, data.data());
             }
             if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
             return true;
@@ -503,19 +524,36 @@ jint hooked_java_read(JNIEnv* env, jobject self, Array array, jint offset, jint 
     return got;
 }
 
+jint stock_java_direct(JNIEnv* env, jobject self, jobject buffer, jint count, jboolean blocking) {
+    JavaReadScope scope;
+    return orig_java_direct ? orig_java_direct(env, self, buffer, count, blocking) : -3;
+}
+
 jint hooked_java_direct(JNIEnv* env, jobject self, jobject buffer, jint count, jboolean blocking) {
-    jint got;
-    { JavaReadScope scope; got = orig_java_direct(env, self, buffer, count, blocking); }
+    if (!g_in_java_read) {
+        if (const auto replaced = avcrt::direct_aac::read(env, self, buffer, count, blocking)) return *replaced;
+    }
+    const jint got = stock_java_direct(env, self, buffer, count, blocking);
     if (env->ExceptionCheck() || !buffer || got <= 0 || got > count ||
         env->GetDirectBufferCapacity(buffer) < got) return got;
     void* data = env->GetDirectBufferAddress(buffer);
     if (!data) return got;
     const jint format = env->CallIntMethod(self, java_format);
     if (env->ExceptionCheck()) { env->ExceptionClear(); return got; }
-    const int bps = format == 2 ? 2 : format == 4 ? 4 : 0;
-    if (!bps || got % bps || reinterpret_cast<uintptr_t>(data) % bps) return got;
+    const int bps = format == 2 ? 2 : format == 4 ? 4 : format == 21 ? 3 : 0;
+    if (!bps || got % bps || (bps != 3 && reinterpret_cast<uintptr_t>(data) % bps)) return got;
     process_java(env, self, got / bps, bps, [&](StreamCtx* ctx, size_t frames, unsigned channels) {
-        process_pcm(ctx, data, frames, channels, bps);
+        if (bps == 3) {
+            auto* packed = static_cast<uint8_t*>(data);
+            std::vector<int16_t> samples(got / 3);
+            for (size_t i = 0; i < samples.size(); ++i) {
+                samples[i] = avcrt::pcm24_to_s16(packed + i * 3);
+            }
+            ctx->engine->process(samples.data(), frames);
+            for (size_t i = 0; i < samples.size(); ++i) {
+                avcrt::s16_to_pcm24(samples[i], packed + i * 3);
+            }
+        } else process_pcm(ctx, data, frames, channels, bps);
         return true;
     });
     return got;
@@ -545,79 +583,77 @@ void install_java_read(zygisk::Api* api, JNIEnv* env) {
     orig_java_read<jshortArray> = reinterpret_cast<java_read_fn<jshortArray>>(methods[1].fnPtr);
     orig_java_read<jfloatArray> = reinterpret_cast<java_read_fn<jfloatArray>>(methods[2].fnPtr);
     orig_java_direct = reinterpret_cast<java_direct_fn>(methods[3].fnPtr);
+    if (orig_java_read<jbyteArray> == hooked_java_read<jbyteArray>) orig_java_read<jbyteArray> = nullptr;
+    if (orig_java_read<jshortArray> == hooked_java_read<jshortArray>) orig_java_read<jshortArray> = nullptr;
+    if (orig_java_read<jfloatArray> == hooked_java_read<jfloatArray>) orig_java_read<jfloatArray> = nullptr;
+    if (orig_java_direct == hooked_java_direct) orig_java_direct = nullptr;
+    if (env->ExceptionCheck()) env->ExceptionClear();
     LOGI("AudioRecord JNI hooks: byte=%d short=%d float=%d direct=%d", !!orig_java_read<jbyteArray>,
          !!orig_java_read<jshortArray>, !!orig_java_read<jfloatArray>, !!orig_java_direct);
 }
 
 // Pitch an AAudio capture buffer (stream's client format from the public getters). No overlap —
 // AAudio fills a fresh buffer each read/callback.
-void process_aaudio_stream(void *stream, void *buffer, int32_t frames, const WireConfig &cfg) {
-    int32_t fmt = g_aa_getFormat ? g_aa_getFormat(stream) : -1;
-    int bps = (fmt == kAAudioI16) ? 2 : (fmt == kAAudioFloat) ? 4 : 0;
-    if (bps == 0) return;  // I24_PACKED/I32/other → leave untouched (we only pitch 16-bit/float)
-    uint32_t channels = g_aa_getChannelCount ? static_cast<uint32_t>(g_aa_getChannelCount(stream)) : 1;
-    uint32_t rate     = g_aa_getSampleRate   ? static_cast<uint32_t>(g_aa_getSampleRate(stream))   : 16000;
-    if (channels == 0) channels = 1;
-    if (rate == 0) rate = 16000;
+void process_aaudio_stream(AAudioStream *stream, void *buffer, int32_t frames, const WireConfig &cfg) {
+    const auto fmt = g_aa_getFormat(stream);
+    const auto sample = fmt == AAUDIO_FORMAT_PCM_I16 ? pcm::Sample::S16 :
+                        fmt == AAUDIO_FORMAT_PCM_FLOAT ? pcm::Sample::Float : pcm::Sample::Unsupported;
+    const auto channels = g_aa_getChannelCount(stream);
+    const auto rate = g_aa_getSampleRate(stream);
+    if (!pcm::pcm_span(buffer, frames, rate, channels, sample, SOUNDTOUCH_MAX_CHANNELS).bytes) return;
     StreamCtx *c = ctx_for(stream, rate, channels);
     apply_cfg(c, cfg);
-    process_pcm(c, buffer, static_cast<size_t>(frames), channels, bps);
+    process_pcm(c, buffer, frames, channels, pcm::sample_bytes(sample));
 }
 
 // ===== Hook 2: AAudioStream_read — AAudio BLOCKING-mode capture (incl. MMAP-blocking) =====
-int32_t hooked_aaudio_read(void *stream, void *buffer, int32_t numFrames, int64_t timeoutNs) {
-    g_obtained = false;    // reset: tells us afterwards whether orig went through android::AudioRecord
+aaudio_result_t hooked_aaudio_read(AAudioStream *stream, void *buffer, int32_t numFrames, int64_t timeoutNs) {
     g_in_aaudio++;
-    int32_t got = orig_aaudio_read(stream, buffer, numFrames, timeoutNs);
+    const auto got = orig_aaudio_read.load()(stream, buffer, numFrames, timeoutNs);
     g_in_aaudio--;
-    if (got <= 0 || buffer == nullptr) return got;
+    if (!pcm::valid_read_result(got, numFrames) || !stream || !buffer ||
+        g_aa_getDirection(stream) != AAUDIO_DIRECTION_INPUT) return got;
     maybe_refresh_config();
     WireConfig cfg = current_config();
-    if (!cfg.enabled) return got;
-    // If afhook is active AND this read went through AudioRecord (g_obtained → legacy AAudio →
-    // AudioFlinger), afhook already pitched it at the HAL read → skip. Only MMAP-blocking AAudio
-    // (which bypasses AudioFlinger, so g_obtained stays false) is pitched here when afhook is on.
-    if (g_afhook_active.load() && g_obtained) return got;
-    static int dbg = 0;
-    if (dbg < 5) { LOGI("aaudio-read FIRED frames=%d en=%d rev=%d", got, cfg.enabled, cfg.revision); dbg++; }
+    if (!cfg.enabled || server_capture_active()) return got;
     process_aaudio_stream(stream, buffer, got, cfg);
     return got;
 }
 
 // ===== Hook 3: AAudio data-callback wrapper — CALLBACK-mode capture (incl. MMAP-exclusive/games) =====
 // Installed by wrapping the app's callback at AAudioStreamBuilder_setDataCallback time.
-int32_t my_data_cb(void *stream, void *userData, void *audioData, int32_t numFrames) {
+aaudio_data_callback_result_t my_data_cb(AAudioStream *stream, void *userData, void *audioData, int32_t numFrames) {
     CbCtx *ctx = static_cast<CbCtx *>(userData);
     bool done = g_obtained; g_obtained = false;   // consume the per-cycle flag (always clear)
     // Gate on INPUT FIRST (cheap getter) so OUTPUT/playback callbacks — which we never touch — pay
-    // NO property read / config work in their real-time thread; pitch only the MMAP capture path
-    // (done==true means the legacy path already pitched via obtainBuffer → don't double).
-    if (numFrames > 0 && audioData && !done &&
-        g_aa_getDirection && g_aa_getDirection(stream) == kAAudioInput) {
+    // no property/config work. Skip a legacy buffer already processed by obtainBuffer.
+    if (numFrames > 0 && stream && audioData && !done &&
+        g_aa_getDirection(stream) == AAUDIO_DIRECTION_INPUT) {
         maybe_refresh_config();
         WireConfig cfg = current_config();
-        if (cfg.enabled) {
-            static int dbg = 0;
-            if (dbg < 5) { LOGI("aaudio-cb FIRED frames=%d en=%d rev=%d", numFrames, cfg.enabled, cfg.revision); dbg++; }
+        if (cfg.enabled && !server_capture_active()) {
             process_aaudio_stream(stream, audioData, numFrames, cfg);
         }
     }
     return ctx->app_cb(stream, ctx->app_ud, audioData, numFrames);
 }
 
-void hooked_set_data_callback(void *builder, void *callback, void *userData) {
+void hooked_set_data_callback(AAudioStreamBuilder *builder, AAudioStream_dataCallback callback, void *userData) {
     if (callback) {
-        CbCtx *ctx = new CbCtx{ reinterpret_cast<aaudio_data_cb>(callback), userData };
-        orig_set_data_cb(builder, reinterpret_cast<void *>(my_data_cb), ctx);
-    } else {
-        orig_set_data_cb(builder, callback, userData);   // clearing the callback — pass through
+        auto* ctx = new (std::nothrow) CbCtx{callback, userData};
+        if (ctx) {
+            orig_set_data_cb.load()(builder, my_data_cb, ctx);
+            return;
+        }
     }
+    orig_set_data_cb.load()(builder, callback, userData);
 }
 
-void resolve_ar_getters(void *h) {
-    g_getHalSampleRate   = (getter_u32)dlsym(h, "_ZNK7android11AudioRecord16getHalSampleRateEv");
-    g_getHalChannelCount = (getter_u32)dlsym(h, "_ZNK7android11AudioRecord18getHalChannelCountEv");
-    g_getHalFormat       = (getter_i32)dlsym(h, "_ZNK7android11AudioRecord12getHalFormatEv");
+bool resolve_ar_getters(void *h) {
+    g_ar_rate = reinterpret_cast<getter_u32>(dlsym(h, "_ZNK7android11AudioRecord13getSampleRateEv"));
+    g_ar_channels = reinterpret_cast<getter_u32>(dlsym(h, "_ZNK7android11AudioRecord12channelCountEv"));
+    g_ar_format = reinterpret_cast<getter_i32>(dlsym(h, "_ZNK7android11AudioRecord6formatEv"));
+    return g_ar_rate && g_ar_channels && g_ar_format;
 }
 
 // AAudioStream_read is often a 4-byte B-thunk to the real impl; follow an unconditional B so we hook
@@ -628,7 +664,7 @@ void *follow_b_thunk(void *p) {
     if ((insn & 0xFC000000u) == 0x14000000u) {          // unconditional B
         // sign-extend the 26-bit imm: shift it up to bit31, then arithmetic-shift back down.
         int32_t imm26 = static_cast<int32_t>((insn & 0x03FFFFFFu) << 6) >> 6;
-        return static_cast<uint8_t *>(p) + (static_cast<intptr_t>(imm26) << 2);
+        return static_cast<uint8_t *>(p) + static_cast<intptr_t>(imm26) * 4;
     }
     return p;
 }
@@ -636,56 +672,55 @@ void *follow_b_thunk(void *p) {
 // ---- inline-hook installers ----
 // libaudioclient/libaaudio load AFTER fork (first audio use). A poll thread installs each hook once
 // its lib appears. No linker monitor, no helper .so, no dlopen storm.
-std::atomic<bool> g_obtain_hooked{false};
-std::atomic<bool> g_aaudio_hooked{false};
+std::atomic<bool> g_obtain_checked{false};
+std::atomic<bool> g_aaudio_checked{false};
+
+template <typename Fn, std::atomic<Fn>& Original>
+void install_native(const char* name, void* target, Fn replacement) {
+    int reason = 0;
+    const char* detail = nullptr;
+    const auto trampoline = avcrt::avcrt_inline_hook(target, reinterpret_cast<void*>(replacement),
+        &reason, &detail, [](void* original) { Original.store(reinterpret_cast<Fn>(original)); });
+    if (trampoline) LOGI("hooked %s @%p", name, target);
+    else LOGW("%s hook skipped: reason=%d detail=%s", name, reason, detail ? detail : "n/a");
+}
 
 void try_hooks() {
-    if (!g_obtain_hooked.load()) {
+    if (!g_obtain_checked.load()) {
         void *h = dlopen("libaudioclient.so", RTLD_NOW | RTLD_NOLOAD);
         if (h) {
             void *addr = dlsym(h, "_ZN7android11AudioRecord12obtainBufferEPNS0_6BufferEPK8timespecPS3_Pm");
-            if (addr) {
-                g_obtain_hooked.store(true);   // attempt once per resolve
-                resolve_ar_getters(h);
-                int reason = 0;
-                const char *detail = nullptr;
-                void *tr = avcrt::avcrt_inline_hook(addr, (void *)hooked_obtain, &reason, &detail);
-                if (tr) { orig_obtain = (obtain_fn)tr; LOGI("hooked AudioRecord::obtainBuffer @%p", addr); }
-                else    LOGW("obtainBuffer hook SKIPPED @%p reason=%d detail=%s", addr, reason, detail ? detail : "n/a");
-            }
+            g_obtain_checked.store(true);
+            if (addr && resolve_ar_getters(h)) {
+                install_native<obtain_fn, orig_obtain>("AudioRecord::obtainBuffer", addr, hooked_obtain);
+            } else LOGI("native AudioRecord skipped: client PCM ABI unavailable");
+            if (!orig_obtain.load()) dlclose(h);
         }
     }
-    if (!g_aaudio_hooked.load()) {
+    if (!g_aaudio_checked.load()) {
         void *ha = dlopen("libaaudio.so", RTLD_NOW | RTLD_NOLOAD);
         if (ha) {
-            void *rd = dlsym(ha, "AAudioStream_read");
-            void *sc = dlsym(ha, "AAudioStreamBuilder_setDataCallback");
-            if (rd && sc) {
-                g_aaudio_hooked.store(true);
-                g_aa_getFormat       = (aa_i32)dlsym(ha, "AAudioStream_getFormat");
-                g_aa_getChannelCount = (aa_i32)dlsym(ha, "AAudioStream_getChannelCount");
-                g_aa_getSampleRate   = (aa_i32)dlsym(ha, "AAudioStream_getSampleRate");
-                g_aa_getDirection    = (aa_i32)dlsym(ha, "AAudioStream_getDirection");
-                int reason = 0;
-                const char *detail = nullptr;
-                // Hook 2: blocking AAudio read (follow the B-thunk to the real impl).
-                void *rd_real = follow_b_thunk(rd);
-                void *tr = avcrt::avcrt_inline_hook(rd_real, (void *)hooked_aaudio_read, &reason, &detail);
-                if (tr) { orig_aaudio_read = (aaudio_read_fn)tr; LOGI("hooked AAudioStream_read @%p (real %p)", rd, rd_real); }
-                else    LOGW("AAudioStream_read hook SKIPPED @%p reason=%d detail=%s", rd_real, reason, detail ? detail : "n/a");
-                // Hook 3: data-callback registration (wrap the app callback for callback-mode capture).
-                void *sc_real = follow_b_thunk(sc);
-                reason = 0;
-                void *tr2 = avcrt::avcrt_inline_hook(sc_real, (void *)hooked_set_data_callback, &reason, &detail);
-                if (tr2) { orig_set_data_cb = (set_data_cb_fn)tr2; LOGI("hooked setDataCallback @%p (real %p)", sc, sc_real); }
-                else     LOGW("setDataCallback hook SKIPPED @%p reason=%d detail=%s", sc_real, reason, detail ? detail : "n/a");
-            }
+            g_aaudio_checked.store(true);
+            g_aa_getFormat = reinterpret_cast<decltype(g_aa_getFormat)>(dlsym(ha, "AAudioStream_getFormat"));
+            g_aa_getChannelCount = reinterpret_cast<decltype(g_aa_getChannelCount)>(dlsym(ha, "AAudioStream_getChannelCount"));
+            g_aa_getSampleRate = reinterpret_cast<decltype(g_aa_getSampleRate)>(dlsym(ha, "AAudioStream_getSampleRate"));
+            g_aa_getDirection = reinterpret_cast<decltype(g_aa_getDirection)>(dlsym(ha, "AAudioStream_getDirection"));
+            if (g_aa_getFormat && g_aa_getChannelCount && g_aa_getSampleRate && g_aa_getDirection) {
+                if (void* rd = dlsym(ha, "AAudioStream_read")) {
+                    install_native<aaudio_read_fn, orig_aaudio_read>("AAudioStream_read", follow_b_thunk(rd), hooked_aaudio_read);
+                }
+                if (void* sc = dlsym(ha, "AAudioStreamBuilder_setDataCallback")) {
+                    install_native<set_data_cb_fn, orig_set_data_cb>("AAudioStreamBuilder_setDataCallback",
+                        follow_b_thunk(sc), hooked_set_data_callback);
+                }
+            } else LOGI("AAudio skipped: stream getters unavailable");
+            if (!orig_aaudio_read.load() && !orig_set_data_cb.load()) dlclose(ha);
         }
     }
 }
 
 void *hook_poller(void *) {
-    for (int i = 0; i < 300 && !(g_obtain_hooked.load() && g_aaudio_hooked.load()); i++) {
+    for (int i = 0; i < 300 && !(g_obtain_checked.load() && g_aaudio_checked.load()); i++) {
         try_hooks();
         usleep(200000);  // 200 ms; ~60 s budget
     }
@@ -696,12 +731,25 @@ class AvcrtModule : public zygisk::ModuleBase {
 public:
     void onLoad(zygisk::Api *api, JNIEnv *env) override { g_api = api; env_ = env; }
 
-    void preAppSpecialize(zygisk::AppSpecializeArgs *) override { install_java_read(g_api, env_); }
+    void preAppSpecialize(zygisk::AppSpecializeArgs *) override {
+        if (env_->PushLocalFrame(32) != JNI_OK) {
+            if (env_->ExceptionCheck()) env_->ExceptionClear();
+            return;
+        }
+        install_java_read(g_api, env_);
+        // Probe independently in Zygisk app processes, including when DSP is
+        // off. The live switch and each session's contract govern replacement.
+        if (orig_java_direct) {
+            avcrt::direct_aac::install(g_api, env_, stock_java_direct, stock_aac_config);
+        }
+        avcrt::recorder::install(g_api, env_, recorder_read, stock_aac_config);
+        env_->PopLocalFrame(nullptr);
+    }
 
     void postAppSpecialize(const zygisk::AppSpecializeArgs *) override {
         refresh_config();   // prime (prop may be unset on a fresh boot)
         try_hooks();        // hook now if the libs are already loaded…
-        if (!(g_obtain_hooked.load() && g_aaudio_hooked.load())) {  // …else poll until they load
+        if (!(g_obtain_checked.load() && g_aaudio_checked.load())) {  // …else poll within the discovery budget
             pthread_t t;
             if (pthread_create(&t, nullptr, hook_poller, nullptr) == 0) pthread_detach(t);
         }
@@ -713,5 +761,12 @@ private:
 };
 
 }  // namespace
+
+bool avcrt::stock_capture::aac_allowed() {
+    return aac_allowed([](const char* key) {
+        if (std::strcmp(key, avcrt::af_backend::kProperty) == 0) return avcrt::af_backend::claimed();
+        return prop_i(key, 0) != 0;
+    });
+}
 
 REGISTER_ZYGISK_MODULE(AvcrtModule)
