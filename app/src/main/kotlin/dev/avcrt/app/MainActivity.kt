@@ -6,8 +6,10 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import dagger.hilt.android.AndroidEntryPoint
 import dev.avcrt.app.navigation.AvcrtRootScreen
 import dev.avcrt.app.overlay.OverlayService
@@ -34,16 +36,18 @@ class MainActivity : AppCompatActivity() {
         // (the Home toggle has already secured the overlay permission); stops when disabled. The
         // service is foreground, so it keeps running after the activity goes to the background.
         lifecycleScope.launch {
-            settingsRepository.observe()
-                .map { it.floatingWindowEnabled }
-                .distinctUntilChanged()
-                .collect { enabled ->
-                    if (enabled && Settings.canDrawOverlays(this@MainActivity)) {
-                        OverlayService.start(this@MainActivity)
-                    } else if (!enabled) {
-                        OverlayService.stop(this@MainActivity)
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                settingsRepository.observe()
+                    .map { it.floatingWindowEnabled }
+                    .distinctUntilChanged()
+                    .collect { enabled ->
+                        if (enabled && Settings.canDrawOverlays(this@MainActivity)) {
+                            OverlayService.start(this@MainActivity)
+                        } else {
+                            OverlayService.stop(this@MainActivity)
+                        }
                     }
-                }
+            }
         }
 
         setContent {

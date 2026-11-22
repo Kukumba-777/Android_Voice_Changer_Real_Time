@@ -1,11 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="overlay_expand">Open AVCRT controls</string>
     <string name="overlay_collapse">Collapse</string>
-    <string name="overlay_voice_changer">Voice changer</string>
+    <string name="overlay_engine">AVCRT engine</string>
+    <string name="overlay_presets">Presets</string>
+    <string name="overlay_sounds">Sounds</string>
     <string name="overlay_builtin">Built-in</string>
     <string name="overlay_custom">Custom</string>
     <string name="overlay_no_presets">No presets</string>
-    <string name="overlay_play_sound_in_call">Play sound in call</string>
+    <string name="overlay_sound_enable">Turn on AVCRT to play into the microphone stream.</string>
+    <string name="overlay_no_sounds">Import clips in Files → Sounds.</string>
+    <string name="overlay_sort_name">By name</string>
+    <string name="overlay_sort_recent">Newest first</string>
+    <string name="overlay_play_clip">Play %1$s into the microphone stream</string>
+    <string name="overlay_stop_clip">Stop %1$s</string>
     <string name="overlay_channel_name">AVCRT overlay</string>
     <string name="overlay_notification_title">AVCRT</string>
     <string name="overlay_notification_text">Floating window is active</string>
