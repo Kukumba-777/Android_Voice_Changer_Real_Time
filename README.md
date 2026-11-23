@@ -81,6 +81,11 @@ runs. Generated APKs and ZIPs are build artifacts, not source files.
 4. Select a preset, enable processing, and start a **new** recording or call.
 5. Listen to the saved recording or have the other party verify the call audio.
 
+If KernelSU installs AVCRT but does not mount its system files after reboot,
+your setup may need a mounting metamodule. [Mountify](https://github.com/backslashxx/mountify)
+is one option if your kernel supports OverlayFS. If AVCRT already mounts
+correctly, you do not need to install Mountify.
+
 Changing a preset or the master switch during an active recording/call may not
 take effect until the next capture session. Installing a new APK does not
 automatically replace a root module already installed by the manager; update
