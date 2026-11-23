@@ -15,10 +15,12 @@ mkdir -p "$DATA"; chmod 0755 "$DATA"
 [ -f "$DATA/engine_state" ] || { echo off > "$DATA/engine_state"; chmod 0644 "$DATA/engine_state"; }
 rm -f /data/adb/avcrt_install_pending 2>/dev/null
 
-# Transient PCM only. The directory is not writable by capture clients.
-SOUND=/dev/avcrt_sound
-mkdir -p "$SOUND" && chmod 0755 "$SOUND"
-rm -f "$SOUND/clip.pcm"
+# Persistent PCM on disk. Only the published hard link is visible to capture clients.
+SOUND=/data/avcrt_sound
+mkdir -p "$SOUND" && chmod 0711 "$SOUND"
+rm -f "$SOUND/clip.pcm" "$SOUND/playback" "$SOUND/.link-pending" "$SOUND/.playback-pending" "$SOUND"/.clip-*.pcm
+mkdir -p "$SOUND/cache-v2" && chmod 0700 "$SOUND/cache-v2"
+rm -f "$SOUND/cache-v2"/.build-*.pcm
 if [ -d "$MODDIR/zygisk" ] || [ -f "$MODDIR/bin/avcrt_inject" ]; then
     chcon u:object_r:avcrt_sound_file:s0 "$SOUND"
 fi

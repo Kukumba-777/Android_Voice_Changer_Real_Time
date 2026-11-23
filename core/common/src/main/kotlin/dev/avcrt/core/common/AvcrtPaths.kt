@@ -42,9 +42,11 @@ object AvcrtPaths {
     /** System property the native side watches to reload its config. */
     const val RELOAD_PROPERTY = "avcrt.config.revision"
 
-    /** Transient, read-only to capture clients. See post-fs-data.sh and avcrt_paths.h. */
-    const val SOUNDBOARD_DIR = "/dev/avcrt_sound"
+    /** Read-only playback transport to capture clients, plus a root-private PCM cache. */
+    const val SOUNDBOARD_DIR = "/data/avcrt_sound"
+    const val SOUNDBOARD_PLAYBACK = "$SOUNDBOARD_DIR/playback"
     const val SOUNDBOARD_CLIP = "$SOUNDBOARD_DIR/clip.pcm"
+    const val SOUNDBOARD_CACHE = "$SOUNDBOARD_DIR/cache-v2"
     const val SOUNDBOARD_CONTEXT = "u:object_r:avcrt_sound_file:s0"
 
     /** App-private media directories. Keeping them here avoids feature-specific path literals. */

@@ -10,7 +10,7 @@ compileSdk = "34"
 androidBuildTools = "34.0.0"
 androidNdk = "27.0.12077973"
 androidCmake = "3.22.1"
-minSdk = "31"
+minSdk = "30"
 targetSdk = "34"
 
 # Versioning of the app
@@ -20,8 +20,8 @@ versionName = "0.3.2"
 # KSU module identity (also written into module.prop at build time)
 moduleId = "avcrt"
 moduleName = "AVCRT Voice Changer"
-moduleVersion = "0.4.7-soundboard"
-moduleVersionCode = "11"
+moduleVersion = "0.4.9-soundboard"
+moduleVersionCode = "13"
 moduleAuthor = "AVCRT"
 moduleDescription = "Real-time voice DSP for compatible app capture via Zygisk, with a separate device-dependent cellular backend."
 

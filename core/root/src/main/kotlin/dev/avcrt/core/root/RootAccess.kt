@@ -26,6 +26,9 @@ interface RootAccess {
     /** Runs a one-shot shell command as root and returns stdout. */
     suspend fun exec(command: String): AvcrtResult<String>
 
+    /** Bulk IO on a separate shell so interactive commands are not queued behind it. */
+    suspend fun execBulkIo(command: String): AvcrtResult<String>
+
     /** Writes a file (UTF-8) under a path normally not writable by the app. */
     suspend fun writeFile(path: String, content: String, mode: String = "0644"): AvcrtResult<Unit>
 

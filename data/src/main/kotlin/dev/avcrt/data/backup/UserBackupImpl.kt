@@ -172,8 +172,8 @@ class UserBackupImpl @Inject constructor(
 
         fun add(size: Long, entryLimit: Long) {
             require(++count <= MAX_ENTRIES && size in 1..entryLimit)
+            require(size <= MAX_CONTENT_BYTES - bytes)
             bytes += size
-            require(bytes <= MAX_CONTENT_BYTES)
         }
     }
 

@@ -5,6 +5,7 @@ import com.topjohnwu.superuser.io.SuFile
 import dev.avcrt.core.common.dispatcher.DispatcherProvider
 import dev.avcrt.core.common.result.AvcrtError
 import dev.avcrt.core.common.result.AvcrtResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -55,16 +56,27 @@ class LibsuRootAccess @Inject constructor(
 
     override suspend fun exec(command: String): AvcrtResult<String> = withContext(dispatchers.io) {
         runCatching {
-            val result = Shell.cmd(command).exec()
-            if (result.isSuccess) AvcrtResult.Success(result.out.joinToString("\n"))
-            else AvcrtResult.Failure(
-                AvcrtError.Io(
-                    message = "Command failed (code=${result.code}): " +
-                        result.err.joinToString("\n"),
-                ),
-            )
+            Shell.cmd(command).exec().asAvcrtResult()
         }.getOrElse { AvcrtResult.Failure(AvcrtError.Io("Command threw", it)) }
     }
+
+    override suspend fun execBulkIo(command: String): AvcrtResult<String> = withContext(dispatchers.io) {
+        try {
+            Shell.Builder.create().setFlags(Shell.FLAG_MOUNT_MASTER).setTimeout(SHELL_TIMEOUT_SECONDS)
+                .build().use { shell ->
+                    if (!shell.isRoot) AvcrtResult.Failure(AvcrtError.RootDenied())
+                    else shell.newJob().add(command).to(mutableListOf(), mutableListOf()).exec().asAvcrtResult()
+                }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            AvcrtResult.Failure(AvcrtError.Io("Bulk root command threw", e))
+        }
+    }
+
+    private fun Shell.Result.asAvcrtResult(): AvcrtResult<String> =
+        if (isSuccess) AvcrtResult.Success(out.joinToString("\n"))
+        else AvcrtResult.Failure(AvcrtError.Io("Command failed (code=$code): ${err.joinToString("\n")}"))
 
     override suspend fun writeFile(path: String, content: String, mode: String): AvcrtResult<Unit> =
         withContext(dispatchers.io) {

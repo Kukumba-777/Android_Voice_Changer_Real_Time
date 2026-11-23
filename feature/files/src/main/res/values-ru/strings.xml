@@ -3,7 +3,7 @@
     <string name="files_models">ИИ-модели</string>
     <string name="files_sounds">Звуки</string>
     <string name="files_models_hint">Импортируйте модели ONNX для ИИ-конвертера. Для общих моделей сохраните имена contentvec.onnx и rmvpe.onnx.</string>
-    <string name="files_sounds_hint">Импортируйте клипы длиной до %1$d сек. Их можно проигрывать из плавающего окна, пока AVCRT включён.</string>
+    <string name="files_sounds_hint">Импортируйте MP3, WAV, M4A, FLAC, Ogg и другие аудиофайлы, поддерживаемые устройством, без ограничения длительности. Проигрывайте их из плавающего окна, пока AVCRT включён.</string>
     <string name="files_import">Импортировать файлы</string>
     <string name="files_imported">Импортировано файлов: %1$d из %2$d.</string>
     <string name="files_open_failed">Не удалось открыть выбранный файл.</string>

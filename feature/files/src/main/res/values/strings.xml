@@ -3,7 +3,7 @@
     <string name="files_models">AI models</string>
     <string name="files_sounds">Sounds</string>
     <string name="files_models_hint">Import ONNX models for the AI converter. Keep the names contentvec.onnx and rmvpe.onnx for the shared models.</string>
-    <string name="files_sounds_hint">Import audio clips up to %1$d seconds. Play them from the floating window while AVCRT is on.</string>
+    <string name="files_sounds_hint">Import MP3, WAV, M4A, FLAC, Ogg or other audio supported by your device, with no time limit. Play sounds from the floating window while AVCRT is on.</string>
     <string name="files_import">Import files</string>
     <string name="files_imported">Imported %1$d of %2$d files.</string>
     <string name="files_open_failed">Could not open the selected file.</string>

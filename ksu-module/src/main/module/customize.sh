@@ -21,6 +21,7 @@ set_perm "$MODPATH/bin/avcrtd"        0 0 0755
 [ ! -f "$MODPATH/bin/avcrt_inject" ] || set_perm "$MODPATH/bin/avcrt_inject" 0 0 0755
 set_perm "$MODPATH/service.sh"        0 0 0755
 set_perm "$MODPATH/post-fs-data.sh"   0 0 0755
+set_perm "$MODPATH/uninstall.sh"      0 0 0755
 
 # Fresh install = engine OFF until the app explicitly enables it. Reset the
 # active-preset config to disabled (a leftover enabled=true would make the daemon

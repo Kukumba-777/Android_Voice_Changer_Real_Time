@@ -7,8 +7,6 @@ import java.io.InputStream
 
 enum class MediaFolder { MODELS, SOUNDS }
 
-const val SOUNDBOARD_MAX_SECONDS = 30
-
 /** A file managed by the in-app media library. */
 data class MediaFile(
     val id: String,

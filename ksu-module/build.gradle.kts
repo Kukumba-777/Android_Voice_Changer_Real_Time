@@ -159,7 +159,7 @@ fun Zip.configureModuleZip(fileName: String, withoutZygisk: Boolean, withAf: Boo
     doLast {
         val src = archiveFile.get().asFile
         ZipFile(src).use { zip ->
-            for (required in listOf("module.prop", "customize.sh", "post-fs-data.sh", "service.sh", "bin/avcrtd")) {
+            for (required in listOf("module.prop", "customize.sh", "post-fs-data.sh", "service.sh", "uninstall.sh", "bin/avcrtd")) {
                 check(zip.getEntry(required)?.isDirectory == false) { "$fileName is missing $required" }
             }
             val hasZygisk = zip.entries().asSequence().any { it.name == "zygisk" || it.name.startsWith("zygisk/") }

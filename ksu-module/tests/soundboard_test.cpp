@@ -8,7 +8,7 @@ using namespace avcrt::soundboard;
 
 int main() {
     Cursor cursor;
-    Clip clip{100, std::vector<int16_t>(kRate / 10, 1000)};
+    Window clip{{100, kRate / 10}, 0, std::vector<int16_t>(kRate / 10, 1000)};
     clip.pcm[0] = 2000;
     clip.pcm[3] = 3000;
     clip.pcm[6] = -1000;
@@ -32,7 +32,7 @@ int main() {
     for (auto sample : output) assert(sample == 42);
 
     // Replacing the sound resets the cursor; conversion interpolates at a fractional rate.
-    Clip next{300, {2000, 3000, 4000}};
+    Window next{{300, 3}, 0, {2000, 3000, 4000}};
     output.fill(0);
     mix(next, cursor, 300, output.size(), 96000, add);
     assert(output[0] == 2000 * kClipGain);

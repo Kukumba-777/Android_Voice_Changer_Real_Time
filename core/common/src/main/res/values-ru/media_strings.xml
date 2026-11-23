@@ -2,7 +2,7 @@
     <string name="error_media_file_type">Неподдерживаемый файл. Выберите модель ONNX или аудиофайл, который поддерживает Android.</string>
     <string name="error_media_exists">Файл с таким именем уже есть.</string>
     <string name="error_media_too_large">Файл слишком большой для импорта.</string>
-    <string name="error_sound_too_long">Этот клип слишком длинный для звуковой панели.</string>
+    <string name="error_sound_storage">Не удалось сохранить временный аудиофайл. Проверьте свободное место.</string>
     <string name="error_sound_decode">Не удалось декодировать аудиофайл.</string>
     <string name="error_sound_engine_off">Включите AVCRT, чтобы проигрывать клипы в поток микрофона.</string>
     <string name="error_sound_module">Обновите модуль AVCRT и перезагрузите устройство, чтобы проигрывать звуки.</string>

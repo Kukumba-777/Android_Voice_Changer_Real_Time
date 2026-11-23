@@ -2,7 +2,7 @@
     <string name="error_media_file_type">Unsupported file. Choose an ONNX model or an Android-supported audio file for its folder.</string>
     <string name="error_media_exists">A file with this name already exists.</string>
     <string name="error_media_too_large">This file is too large to import.</string>
-    <string name="error_sound_too_long">The audio clip is too long for the soundboard.</string>
+    <string name="error_sound_storage">Could not save the temporary audio file. Check available storage.</string>
     <string name="error_sound_decode">Could not decode this audio file.</string>
     <string name="error_sound_engine_off">Turn on AVCRT to play clips into the microphone stream.</string>
     <string name="error_sound_module">Update the AVCRT module and reboot to enable sound playback.</string>

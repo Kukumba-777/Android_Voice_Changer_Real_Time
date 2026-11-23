@@ -13,7 +13,6 @@ import dev.avcrt.core.common.result.UserMessage
 import dev.avcrt.domain.media.MediaFile
 import dev.avcrt.domain.media.MediaFolder
 import dev.avcrt.domain.media.MediaRepository
-import dev.avcrt.domain.media.SOUNDBOARD_MAX_SECONDS
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
@@ -158,14 +157,9 @@ class MediaRepositoryImpl @Inject constructor(
         val extractor = MediaExtractor()
         try {
             extractor.setDataSource(file.absolutePath)
-            val audio = (0 until extractor.trackCount).map(extractor::getTrackFormat)
-                .firstOrNull { it.getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true }
-                ?: throw ImportError(R.string.error_media_file_type)
-            if (audio.containsKey(MediaFormat.KEY_DURATION) &&
-                audio.getLong(MediaFormat.KEY_DURATION) > SOUNDBOARD_MAX_SECONDS * 1_000_000L
-            ) throw ImportError(R.string.error_sound_too_long)
-        } catch (e: ImportError) {
-            throw e
+            if ((0 until extractor.trackCount).none {
+                    extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true
+                }) throw ImportError(R.string.error_media_file_type)
         } catch (e: Exception) {
             throw ImportError(R.string.error_media_file_type)
         } finally {
@@ -176,7 +170,7 @@ class MediaRepositoryImpl @Inject constructor(
     private class ImportError(val messageRes: Int) : Exception()
 
     internal companion object {
-        fun maxBytes(folder: MediaFolder) = if (folder == MediaFolder.SOUNDS) 32L shl 20 else 1024L shl 20
+        fun maxBytes(folder: MediaFolder) = if (folder == MediaFolder.SOUNDS) Long.MAX_VALUE else 1024L shl 20
 
         fun isLibraryName(folder: MediaFolder, name: String) = name.isNotBlank() && !name.startsWith('.') &&
             name.toByteArray().size <= 240 && '/' !in name && '\\' !in name && name.none { it.isISOControl() } &&

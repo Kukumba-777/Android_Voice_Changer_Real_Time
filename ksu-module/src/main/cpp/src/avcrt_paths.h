@@ -10,6 +10,7 @@ constexpr const char* kActivePreset    = "/data/local/tmp/avcrt/active_preset.js
 constexpr const char* kEngineState     = "/data/local/tmp/avcrt/engine_state";
 constexpr const char* kReloadProperty  = "avcrt.config.revision";
 constexpr const char* kBypassVoiceProperty = "avcrt.dsp.bypass_voice";
-constexpr const char* kSoundboardClip = "/dev/avcrt_sound/clip.pcm";
+constexpr const char* kSoundboardClip = "/data/avcrt_sound/clip.pcm";
+constexpr const char* kSoundboardPlayback = "/data/avcrt_sound/playback";
 constexpr const char* kLogTag          = "avcrtfx";
 }  // namespace avcrt::paths

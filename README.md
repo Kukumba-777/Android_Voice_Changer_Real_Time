@@ -40,7 +40,8 @@ or the soundboard.
 ## Requirements
 
 - Rooted Android device with **KernelSU or Magisk**.
-- Android 12 or newer for the app.
+- Android 11 (API 30) or newer to install the app. Capture support still depends
+  on the device and its audio stack.
 - For building: JDK 17, Android SDK, NDK and CMake. The pinned versions are in
   `gradle/libs.versions.toml`.
 - Internet access for the first native build, which downloads the pinned
@@ -87,10 +88,19 @@ the module and reboot as needed.
 
 ### Floating soundboard
 
-- **Files → Sounds** imports audio clips up to 30 seconds in formats supported
-  by Android on the device. In the floating window, open **Sounds** to sort and
-  play/stop clips. Playback mixes a single clip into supported microphone capture
-  after the voice DSP; it does not play through the device speaker.
+- **Files → Sounds** imports MP3, WAV, M4A/AAC, FLAC, Ogg and other formats that
+  Android can decode on the device. There is no AVCRT time or size limit per
+  clip. In the floating window, open **Sounds** to sort and play/stop clips.
+  Playback mixes one clip into supported microphone capture after the voice DSP;
+  it does not play through the device speaker.
+- With the updated root module, clips prepare in the background after import or
+  restore. Existing clips are also prepared after the first launch. A ready clip
+  starts without decoding or copying on Play; the first play of a clip still
+  being prepared will wait for it. Leave AVCRT open for large imports to finish.
+- Besides the imported original, prepared clips take about 5.5 MiB of disk space
+  per minute of audio, with up to twice that during preparation. Prepared copies
+  are not included in backups and are removed when the sound is deleted from the
+  library or the root module is uninstalled.
 - **Clip volume** (10–100%, default 100%) adjusts the clip, not the microphone.
 - If speech comes through but music cuts out in a WhatsApp call, turn off
   **Noise cancellation** in the WhatsApp call menu, if available. This is
@@ -100,8 +110,8 @@ the module and reboot as needed.
   the soundboard available. In cellular calls AVCRT still uses its existing uplink
   route, so levels and device compatibility can differ from an unmodified call.
 - Update the AVCRT root module from the new APK and reboot. Start a supported
-  recording or call before pressing play: clips are timed from the button press,
-  not queued until a microphone opens. The soundboard follows AVCRT's capture
+  recording or call before pressing play: playback is not queued until a
+  microphone opens. The soundboard follows AVCRT's capture
   scope and can be heard by multiple compatible recordings active at once.
 - New presets and clips imported in AVCRT appear in the floating menu without
   restarting it. Android can hide overlays on protected screens (such as some
@@ -117,9 +127,9 @@ the module and reboot as needed.
   backup**. The ZIP includes custom presets, sounds, ONNX models and selected UI
   preferences. Existing presets and files with matching IDs/names are kept.
   Engine state, the active preset, root module and permissions are not restored.
-- Each ZIP supports up to 4 GiB of uncompressed content (up to 1 GiB per model,
-  32 MiB per clip). Restoring needs temporary storage for both the ZIP and the
-  extracted files.
+- Each ZIP supports up to 4 GiB of uncompressed content (up to 1 GiB per model).
+  This is a backup limit, not a limit on soundboard imports. Restoring needs
+  temporary storage for both the ZIP and the extracted files.
 
 ## GSM kernel patches
 

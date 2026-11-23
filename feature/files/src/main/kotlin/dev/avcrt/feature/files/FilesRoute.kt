@@ -49,7 +49,6 @@ import androidx.navigation.compose.composable
 import dev.avcrt.core.ui.AvcrtSpacing
 import dev.avcrt.core.ui.components.AvcrtScreen
 import dev.avcrt.domain.media.MediaFolder
-import dev.avcrt.domain.media.SOUNDBOARD_MAX_SECONDS
 import java.text.Collator
 
 object FilesRoute { const val path = "files" }
@@ -122,15 +121,15 @@ private fun FilesScreen(vm: FilesViewModel = hiltViewModel()) {
             }
             Text(
                 if (folder == MediaFolder.MODELS) stringResource(R.string.files_models_hint)
-                else stringResource(R.string.files_sounds_hint, SOUNDBOARD_MAX_SECONDS),
+                else stringResource(R.string.files_sounds_hint),
                 modifier = Modifier.padding(AvcrtSpacing.lg),
                 style = MaterialTheme.typography.bodyMedium,
             )
             FilledTonalButton(
                 onClick = {
-                    // ONNX has no consistently registered MIME type in Android document providers.
+                    // Providers sometimes mislabel audio and ONNX; validate the selected files instead.
                     if (folder == MediaFolder.MODELS) modelsPicker.launch(arrayOf("*/*"))
-                    else soundsPicker.launch(arrayOf("audio/*", "application/ogg", "application/octet-stream"))
+                    else soundsPicker.launch(arrayOf("*/*"))
                 },
                 enabled = !busy,
                 modifier = Modifier.padding(horizontal = AvcrtSpacing.lg),
