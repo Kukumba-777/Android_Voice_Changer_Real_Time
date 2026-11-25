@@ -19,14 +19,16 @@ the KernelSU/Magisk module processes the audio. Processing runs on the device.
 
 | Device | Confirmed routes | Requirements |
 | --- | --- | --- |
-| **OnePlus Nord 1** (`avicii`) | Legacy cellular audio route | Matching AVCRT patches for the vendor Linux 4.19 kernel. |
-| **Xiaomi Poco F6** (`peridot`) | Built-in handset microphone and USB-C headset microphone on compatible routes; experimental | Matching AVCRT patches for the vendor Linux 6.1 audio modules and compatible Qualcomm AudioReach/AGM firmware. |
+| **OnePlus Nord 1** (`avicii`) | Legacy cellular audio route | [AVCRT patches for the vendor Linux 4.19 kernel](https://github.com/Kukumba-777/avcrt_kernel_patches/tree/master/avicii-oneplus-nord-1). |
+| **Xiaomi Poco F6** (`peridot`) | Built-in handset microphone and USB-C headset microphone on compatible routes; experimental | [AVCRT patches for the vendor Linux 6.1 audio modules](https://github.com/Kukumba-777/avcrt_kernel_patches/tree/master/peridot-xiaomi-poco-f6) and compatible Qualcomm AudioReach/AGM firmware. |
 
 These are confirmed device and route combinations, not a model allowlist or a
 guarantee for every firmware, accessory, or speakerphone mode. Other devices can
 use the same backend if their kernel and audio stack expose the required
 interfaces. Ordinary app recording does not require the SIM-call patches.
-See [cellular routing and kernel patches](docs/architecture.md#cellular-calls).
+See the [AVCRT kernel patches repository](https://github.com/Kukumba-777/avcrt_kernel_patches)
+for patch files and application instructions, and the
+[cellular routing overview](docs/architecture.md#cellular-calls) for how AVCRT uses them.
 
 > **Experimental:** Modules and kernel patches can cause audio glitches, brief
 > returns to the original microphone, or loss of call audio. Keep a known-good
