@@ -2,8 +2,8 @@
 //
 // A persistent root daemon. It watches the engine on/off + preset (via ConfigStore,
 // the same active_preset.json + avcrt.config.revision the app already writes) and the
-// live cellular-call state, and when both are active it engages a CLEAN voice replace:
-// the far end hears ONLY the processed (pitched) voice; the real voice is removed.
+// live cellular-call state. It prefers the legacy route below. On other cards
+// a separate worker can try VA/AGM with leased mute and best-effort routing.
 //
 // Mechanism (fully adaptive — no hardcoded session/decimator/port):
 //   * The kernel "AVCRT Dec Mute" kcontrol (tx-macro.c patch) mutes, at the codec, the
@@ -17,26 +17,38 @@
 
 #include <tinyalsa/asoundlib.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <csignal>
 #include <ctime>
+#include <dirent.h>
 #include <pthread.h>
 #include <fcntl.h>
 #include <sys/file.h>
+#include <sys/ioctl.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/system_properties.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
 #include <string>
+#include <string_view>
+#include <spawn.h>
+#include <sound/asound.h>
 
 #include "avcrt_engine.h"
 #include "avcrt_config.h"
+#include "avcrt_agm.h"
+#include "avcrt_cellular_backend.h"
+#include "avcrt_lpass_probe.h"
 #include "avcrt_capture_probe.h"
 #include "avcrt_codec_mixer.h"
 
@@ -44,6 +56,7 @@ using avcrt::ConfigStore;
 using avcrt::DspConfig;
 using avcrt::Engine;
 namespace codec = avcrt::codec_mixer;
+extern char** environ;
 
 namespace {
 
@@ -62,6 +75,8 @@ constexpr unsigned kUsbPeriodMax = 768;
 unsigned g_usb_rate = kUsbRateDefault;
 unsigned g_usb_period = kUsbPeriodMax;
 constexpr int      kIdlePollMs = 400;  // how often we look for a call while idle
+constexpr int      kAgmWatchMs = 100; // reap a worker promptly without changing legacy polling
+constexpr int      kAgmHandoffPollMs = 50; // only around an observed AGM call/route
 
 // Capture/engage mode for the current call.
 //  MODE_BT = a Bluetooth (HFP/SCO) headset call — the uplink sources from INT_BT_SCO_TX
@@ -172,6 +187,395 @@ int find_voice_card(bool report = false) {
         else puts("Voice card not selected: no matching PCM and mixer schema");
     }
     return found;
+}
+
+// No PCM opens, ELEM_WRITE ioctls, or mixer plugins. The kernel inventory does
+// not include private AGM graphs, so none of these matches enables routing.
+bool route_control(const std::string& name) {
+    constexpr const char* tokens[] = {
+        "TX_AIF", "TX DEC", "TX DMIC", "TX SMIC", "ADC", "SWR_MIC",
+        "VA_AIF", "VA DEC", "VA DMIC", "VA SMIC",
+        "CODEC_DMA", "Voice", "Incall", "INCALL", "Telephony", "AVCRT ",
+    };
+    for (const char* token : tokens)
+        if (name.find(token) != std::string::npos) return true;
+    return false;
+}
+
+void print_alsa_control(int fd, const snd_ctl_elem_id& id) {
+    const auto* raw = reinterpret_cast<const char*>(id.name);
+    const std::string name(raw, strnlen(raw, sizeof(id.name)));
+    printf("    #%u %s", id.numid, name.c_str());
+    if (!route_control(name)) { putchar('\n'); return; }
+
+    snd_ctl_elem_info info{};
+    info.id = id;
+    if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_INFO, &info) < 0) {
+        printf(" [info: %s]\n", strerror(errno));
+        return;
+    }
+    printf(" type=%d count=%u", info.type, info.count);
+    if (!(info.access & SNDRV_CTL_ELEM_ACCESS_READ) ||
+        (info.type != SNDRV_CTL_ELEM_TYPE_BOOLEAN && info.type != SNDRV_CTL_ELEM_TYPE_INTEGER &&
+         info.type != SNDRV_CTL_ELEM_TYPE_ENUMERATED)) {
+        putchar('\n');
+        return;
+    }
+
+    snd_ctl_elem_value value{};
+    value.id = id;
+    if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_READ, &value) < 0) {
+        printf(" [read: %s]\n", strerror(errno));
+        return;
+    }
+    printf(" current=");
+    constexpr unsigned kMaxValues = 8;
+    for (unsigned i = 0; i < info.count && i < kMaxValues; ++i) {
+        if (i) putchar(',');
+        if (info.type != SNDRV_CTL_ELEM_TYPE_ENUMERATED) {
+            printf("%ld", value.value.integer.value[i]);
+            continue;
+        }
+        snd_ctl_elem_info item{};
+        item.id = id;
+        item.value.enumerated.item = value.value.enumerated.item[i];
+        if (item.value.enumerated.item < info.value.enumerated.items &&
+            ioctl(fd, SNDRV_CTL_IOCTL_ELEM_INFO, &item) == 0) {
+            printf("%.*s", static_cast<int>(sizeof(item.value.enumerated.name)), item.value.enumerated.name);
+        } else {
+            printf("%u (?)", value.value.enumerated.item[i]);
+        }
+    }
+    if (info.count > kMaxValues) printf(",...");
+    putchar('\n');
+}
+
+// LPASS control-name schema, not a mapping to a particular board or DSP graph.
+struct LpassDecRoutes {
+    struct Edge {
+        unsigned aif, dec;
+        snd_ctl_elem_id id;
+    };
+    std::vector<Edge> edges;
+
+    static bool number(std::string_view& text, unsigned& value) {
+        if (text.empty()) return false;
+        const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+        if (result.ec != std::errc{}) return false;
+        text.remove_prefix(result.ptr - text.data());
+        return true;
+    }
+
+    void observe(const snd_ctl_elem_id& id) {
+        if (id.iface != SNDRV_CTL_ELEM_IFACE_MIXER) return;
+        const auto* raw = reinterpret_cast<const char*>(id.name);
+        std::string_view name(raw, strnlen(raw, sizeof(id.name)));
+        constexpr std::string_view prefix = "TX_AIF", infix = "_CAP Mixer DEC";
+        if (name.substr(0, prefix.size()) != prefix) return;
+        name.remove_prefix(prefix.size());
+        unsigned aif, dec;
+        if (!number(name, aif) || name.substr(0, infix.size()) != infix) return;
+        name.remove_prefix(infix.size());
+        if (number(name, dec) && name.empty()) edges.push_back({aif, dec, id});
+    }
+
+    static bool read_scalar(int fd, const snd_ctl_elem_id& id, long& current) {
+        snd_ctl_elem_info info{};
+        info.id = id;
+        if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_INFO, &info) < 0 || info.count != 1 ||
+            !(info.access & SNDRV_CTL_ELEM_ACCESS_READ) ||
+            (info.type != SNDRV_CTL_ELEM_TYPE_BOOLEAN && info.type != SNDRV_CTL_ELEM_TYPE_INTEGER))
+            return false;
+        snd_ctl_elem_value value{};
+        value.id = id;
+        if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_READ, &value) < 0) return false;
+        current = value.value.integer.value[0];
+        return true;
+    }
+
+    template <typename ReadSnapshot>
+    void report(int fd, const avcrt::lpass::Snapshot& snapshot, ReadSnapshot read_snapshot) {
+        using avcrt::lpass::Status;
+        if (snapshot.status != Status::Present) return;
+        const long mask = snapshot.power;
+        if (edges.empty()) {
+            puts("  LPASS DEC -> TX_AIF: unknown (no recognized mixer switches)");
+            return;
+        }
+        std::sort(edges.begin(), edges.end(), [](const Edge& a, const Edge& b) {
+            return a.aif != b.aif ? a.aif < b.aif : a.dec < b.dec;
+        });
+        unsigned long observed = 0;
+        std::vector<const Edge*> enabled;
+        for (size_t i = 0; i < edges.size(); ++i) {
+            const auto& edge = edges[i];
+            if (edge.dec >= std::numeric_limits<long>::digits ||
+                (i && edges[i - 1].aif == edge.aif && edges[i - 1].dec == edge.dec)) {
+                puts("  LPASS DEC -> TX_AIF: unknown (ambiguous or incompatible mixer schema)");
+                return;
+            }
+            const auto bit = 1UL << edge.dec; // DEC Power bit positions are DEC indices.
+            observed |= bit;
+            if (!(static_cast<unsigned long>(mask) & bit)) continue;
+            long on;
+            if (!read_scalar(fd, edge.id, on) || (on != 0 && on != 1)) {
+                puts("  LPASS DEC -> TX_AIF: unknown (could not read a powered DEC mixer switch)");
+                return;
+            }
+            if (on) enabled.push_back(&edge);
+        }
+        const auto after = read_snapshot();
+        if (after.status != Status::Present || mask != after.power || snapshot.mute != after.mute ||
+            snapshot.test_mute != after.test_mute || snapshot.supported != after.supported) {
+            puts("  LPASS DEC -> TX_AIF: unknown (LPASS controls unreadable or changed; retry)");
+            return;
+        }
+        puts("  LPASS DEC -> TX_AIF (ALSA snapshot: powered DEC + enabled switch, not modem routing):");
+        for (const auto* edge : enabled) printf("    DEC%u -> TX_AIF%u\n", edge->dec, edge->aif);
+        if (enabled.empty()) puts("    No enabled links from powered DECs among recognized switches");
+        if (static_cast<unsigned long>(mask) & ~observed)
+            puts("    Some powered DECs have no recognized mixer switches");
+    }
+};
+
+bool read_lpass_control(int fd, const snd_ctl_elem_id& id, avcrt::lpass::Control& control) {
+    snd_ctl_elem_info info{};
+    info.id = id;
+    if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_INFO, &info) < 0) return false;
+    if (memcmp(&info.id, &id, sizeof(id)) != 0) return false;
+    control.integer_scalar = info.type == SNDRV_CTL_ELEM_TYPE_INTEGER && info.count == 1;
+    control.readable = info.access & SNDRV_CTL_ELEM_ACCESS_READ;
+    control.writable = info.access & SNDRV_CTL_ELEM_ACCESS_WRITE;
+    if (!control.integer_scalar || !control.readable) return true;
+    control.min = info.value.integer.min;
+    control.max = info.value.integer.max;
+    snd_ctl_elem_value value{};
+    value.id = id;
+    if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_READ, &value) < 0) return false;
+    control.value = value.value.integer.value[0];
+    return true;
+}
+
+#ifdef AVCRT_AGM_LAB
+// Only used by the explicit SPF experiment; never clear somebody else's mute.
+bool agm_stock_mic() {
+    DIR* dir = opendir("/dev/snd");
+    if (!dir) return false;
+    unsigned candidates = 0;
+    bool clean = true;
+    while (const dirent* entry = readdir(dir)) {
+        unsigned card;
+        int end = 0;
+        if (sscanf(entry->d_name, "controlC%u%n", &card, &end) != 1 || !end || entry->d_name[end]) continue;
+        const std::string path = "/dev/snd/" + std::string(entry->d_name);
+        const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd < 0) { clean = false; break; }
+        avcrt::lpass::Probe<snd_ctl_elem_id> probe;
+        snd_ctl_elem_id ids[32];
+        snd_ctl_elem_list list{};
+        list.space = sizeof(ids) / sizeof(ids[0]);
+        list.pids = ids;
+        do {
+            if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_LIST, &list) < 0 || list.used > list.space ||
+                (!list.used && list.offset < list.count) || list.count > 8192) {
+                clean = false;
+                break;
+            }
+            for (unsigned i = 0; i < list.used; ++i) {
+                if (ids[i].iface != SNDRV_CTL_ELEM_IFACE_MIXER) continue;
+                const auto* raw = reinterpret_cast<const char*>(ids[i].name);
+                probe.observe(std::string_view(raw, strnlen(raw, sizeof(ids[i].name))), ids[i]);
+            }
+            list.offset += list.used;
+        } while (list.offset < list.count);
+        const auto s = probe.snapshot([fd](const auto& id, auto& ctl) { return read_lpass_control(fd, id, ctl); });
+        close(fd);
+        if (!clean) break;
+        if (s.status == avcrt::lpass::Status::Absent) continue;
+        if (s.status != avcrt::lpass::Status::Present || s.mute || s.test_mute || !s.power) {
+            clean = false;
+            break;
+        }
+        ++candidates;
+    }
+    closedir(dir);
+    return clean && candidates == 1;
+}
+#endif
+
+void report_lpass_capability(const avcrt::lpass::Snapshot& snapshot) {
+    using avcrt::lpass::Status;
+    switch (snapshot.status) {
+    case Status::Absent: return;
+    case Status::Incomplete: puts("  LPASS DEC capability: incomplete control set"); return;
+    case Status::Ambiguous: puts("  LPASS DEC capability: ambiguous controls"); return;
+    case Status::Unreadable: puts("  LPASS DEC capability: controls unreadable"); return;
+    case Status::Incompatible: puts("  LPASS DEC capability: incompatible control schema or values"); return;
+    case Status::Changed: puts("  LPASS DEC capability: controls changed during probe; retry"); return;
+    case Status::Present:
+        printf("  LPASS DEC capability: present (mask=%#lx power=%#lx test_mute=%#lx mute=%#lx; no DSP route verified)\n",
+               static_cast<unsigned long>(snapshot.supported), static_cast<unsigned long>(snapshot.power),
+               static_cast<unsigned long>(snapshot.test_mute), static_cast<unsigned long>(snapshot.mute));
+    }
+}
+
+void report_lpass_lease(const avcrt::lpass::Lease& lease) {
+    using avcrt::lpass::Status;
+    switch (lease.status) {
+    case Status::Absent: puts("  LPASS DEC mute lease: not advertised"); break;
+    case Status::Incomplete: puts("  LPASS DEC mute lease: incomplete DEC control set"); break;
+    case Status::Ambiguous: puts("  LPASS DEC mute lease: ambiguous controls"); break;
+    case Status::Unreadable: puts("  LPASS DEC mute lease: controls unreadable"); break;
+    case Status::Incompatible: puts("  LPASS DEC mute lease: incompatible control schema or value"); break;
+    case Status::Changed: puts("  LPASS DEC mute lease: controls changed during probe; retry"); break;
+    case Status::Present: printf("  LPASS DEC mute lease: %ld ms (read-only probe; expiry not tested)\n", lease.ms); break;
+    }
+}
+
+bool codec_tx_name(const char* name) {
+    constexpr char kCodecTx[] = "CODEC_DMA-LPAIF_RXTX-TX-";
+    return strncmp(name, kCodecTx, sizeof(kCodecTx) - 1) == 0;
+}
+
+void report_ctl_pcms(int fd, bool& spf) {
+    // Fallback when /proc/asound/pcm isn't readable. Query names and directions
+    // through the control node, without opening any of the streams themselves.
+    int device = -1;
+    for (;;) {
+        if (ioctl(fd, SNDRV_CTL_IOCTL_PCM_NEXT_DEVICE, &device) < 0) {
+            printf("  PCM enumeration: %s\n", strerror(errno));
+            return;
+        }
+        if (device < 0) return;
+        for (int stream : {SNDRV_PCM_STREAM_CAPTURE, SNDRV_PCM_STREAM_PLAYBACK}) {
+            snd_pcm_info info{};
+            info.device = device;
+            info.stream = stream;
+            if (ioctl(fd, SNDRV_CTL_IOCTL_PCM_INFO, &info) < 0) {
+                if (errno != ENOENT)
+                    printf("  PCM %d stream %d: %s\n", device, stream, strerror(errno));
+                continue;
+            }
+            const auto* name = reinterpret_cast<const char*>(info.name);
+            const bool capture = stream == SNDRV_PCM_STREAM_CAPTURE;
+            const bool codec_tx = capture && codec_tx_name(name);
+            spf |= codec_tx;
+            printf("  %s %d: %.*s : %s %u\n", codec_tx ? "codec TX backend" : "PCM",
+                   device, static_cast<int>(sizeof(info.name)), name,
+                   capture ? "capture" : "playback", info.subdevices_count);
+        }
+    }
+}
+
+bool report_alsa_controls(unsigned card, bool proc_pcm_available, bool& spf) {
+    char path[64];
+    snprintf(path, sizeof(path), "/dev/snd/controlC%u", card);
+    const int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) { printf("  %s: %s\n", path, strerror(errno)); return false; }
+    snd_ctl_card_info info{};
+    if (ioctl(fd, SNDRV_CTL_IOCTL_CARD_INFO, &info) == 0)
+        printf("  ALSA: %.*s\n", static_cast<int>(sizeof(info.longname)),
+               reinterpret_cast<const char*>(info.longname));
+    if (!proc_pcm_available) report_ctl_pcms(fd, spf);
+    snd_ctl_elem_id ids[32];
+    snd_ctl_elem_list list{};
+    list.space = sizeof(ids) / sizeof(ids[0]);
+    list.pids = ids;
+    LpassDecRoutes routes;
+    avcrt::lpass::Probe<snd_ctl_elem_id> lpass;
+    bool ok = true;
+    do {
+        if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_LIST, &list) < 0) {
+            printf("  Control list: %s\n", strerror(errno));
+            ok = false;
+            break;
+        }
+        for (unsigned i = 0; i < list.used; ++i) {
+            print_alsa_control(fd, ids[i]);
+            routes.observe(ids[i]);
+            if (ids[i].iface == SNDRV_CTL_ELEM_IFACE_MIXER) {
+                const auto* raw = reinterpret_cast<const char*>(ids[i].name);
+                lpass.observe(std::string_view(raw, strnlen(raw, sizeof(ids[i].name))), ids[i]);
+            }
+        }
+        list.offset += list.used;
+    } while (list.used && list.offset < list.count);
+    if (ok) {
+        const auto read_snapshot = [&] {
+            return lpass.snapshot([fd](const auto& id, auto& control) {
+                return read_lpass_control(fd, id, control);
+            });
+        };
+        const auto snapshot = read_snapshot();
+        report_lpass_capability(snapshot);
+        const auto lease = lpass.lease(snapshot, [fd](const auto& id, auto& control) {
+            return read_lpass_control(fd, id, control);
+        });
+        if (snapshot.status != avcrt::lpass::Status::Absent || lease.status != avcrt::lpass::Status::Absent)
+            report_lpass_lease(lease);
+        routes.report(fd, snapshot, read_snapshot);
+    }
+    close(fd);
+    return ok;
+}
+
+bool report_alsa_pcm(unsigned card, bool verbose, bool& spf) {
+    char path[64], line[512], target[512];
+    snprintf(path, sizeof(path), "/sys/class/sound/card%u", card);
+    const ssize_t size = readlink(path, target, sizeof(target) - 1);
+    if (size >= 0) {
+        target[size] = '\0';
+        spf = strstr(target, "spf_core_platform") != nullptr;
+        if (verbose) printf("  sysfs: %s\n", target);
+    }
+
+    FILE* f = fopen("/proc/asound/pcm", "re");
+    if (!f) {
+        if (verbose) printf("  /proc/asound/pcm: %s\n", strerror(errno));
+        return false;
+    }
+    while (fgets(line, sizeof(line), f)) {
+        unsigned c, device;
+        int start = 0;
+        if (sscanf(line, "%u-%u: %n", &c, &device, &start) != 2 || !start || c != card) continue;
+        const bool codec_tx = codec_tx_name(line + start) && strstr(line + start, ": capture ");
+        spf |= codec_tx;
+        if (verbose) printf("  %s%s", codec_tx ? "codec TX backend: " : "PCM: ", line);
+    }
+    fclose(f);
+    return true;
+}
+
+int probe_alsa(bool verbose) {
+    // Discover control devices independently of /proc/asound/cards/pcm,
+    // which may not be readable on an enforcing device.
+    DIR* dir = opendir("/dev/snd");
+    if (!dir) {
+        if (verbose) perror("/dev/snd");
+        return 2;
+    }
+    std::vector<unsigned> cards;
+    while (const dirent* entry = readdir(dir)) {
+        unsigned card;
+        int end = 0;
+        if (sscanf(entry->d_name, "controlC%u%n", &card, &end) == 1 && end && !entry->d_name[end])
+            cards.push_back(card);
+    }
+    closedir(dir);
+    std::sort(cards.begin(), cards.end());
+    bool inspected = false;
+    for (unsigned card : cards) {
+        if (verbose) printf("Card %u\n", card);
+        bool spf = false;
+        const bool proc_pcm_available = report_alsa_pcm(card, verbose, spf);
+        if (verbose && report_alsa_controls(card, proc_pcm_available, spf)) inspected = true;
+        if (spf) {
+            if (verbose) puts("  SPF/codec backend candidate; modem uplink and injection unverified");
+            else fprintf(stderr, "[avcrtd] card=%u SPF/codec backend candidate; diagnostic only (--probe-alsa)\n", card);
+        }
+    }
+    if (verbose && cards.empty()) puts("No ALSA control devices found");
+    return inspected ? 0 : 2;
 }
 
 // Find a USB-Audio sound card (a USB/USB-C headset or a USB-C->jack DAC adapter) in
@@ -346,6 +750,55 @@ void* call_monitor(void*) {
 }
 
 bool is_in_call() { return g_in_call.load(); }
+
+// A separate invocation of this binary provides a vendor linker search path
+// only for AGM. Nord and the AudioFlinger monitor retain their environment.
+pid_t start_agm_worker(std::string& generation, int64_t revision) {
+    std::vector<char*> env;
+    for (char** p = environ; *p; ++p) {
+        if (std::string_view(*p).substr(0, 16) != "LD_LIBRARY_PATH=") env.push_back(*p);
+    }
+    char libs[] = "LD_LIBRARY_PATH=/vendor/lib64:/vendor/lib64/hw:/odm/lib64";
+    env.push_back(libs);
+    env.push_back(nullptr);
+    char path[] = "/proc/self/exe", arg[] = "--internal-cellular-agm";
+    auto parent = std::to_string(getpid());
+    auto preset = std::to_string(revision);
+    char* args[]{path, arg, generation.data(), parent.data(), preset.data(), nullptr};
+    posix_spawnattr_t attr;
+    if (posix_spawnattr_init(&attr)) return -1;
+    // The AGM worker and its dumpsys children must not outlive a stuck worker
+    // on daemon shutdown. Do not signal the main daemon's process group.
+    const int attr_rc = posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP) || posix_spawnattr_setpgroup(&attr, 0);
+    pid_t pid = -1;
+    if (attr_rc || posix_spawn(&pid, path, nullptr, &attr, args, env.data())) pid = -1;
+    posix_spawnattr_destroy(&attr);
+    return pid;
+}
+
+bool stop_agm_worker(pid_t pid) {
+    if (pid <= 0) return true;
+    kill(pid, SIGTERM);
+    for (int i = 0; i < 60; ++i) {
+        int status = 0;
+        const auto rc = waitpid(pid, &status, WNOHANG);
+        if (rc == pid) {
+            using avcrt::agm::WorkerExit;
+            if (!WIFEXITED(status)) return false;
+            switch (static_cast<WorkerExit>(WEXITSTATUS(status))) {
+            case WorkerExit::Stopped: case WorkerExit::Refused: case WorkerExit::MicWait:
+            case WorkerExit::Recoverable: case WorkerExit::ColdUplink: case WorkerExit::LeaseLost:
+                return true;
+            default: return false;
+            }
+        }
+        if (rc < 0 && errno != EINTR) return false;
+        sleep_ms(20);
+    }
+    kill(-pid, SIGKILL);
+    // Do not allow another worker if the previous process cannot exit.
+    return false;
+}
 
 // Active VoiceMMode session: 1, 2, or 0 if no cellular call is up. Requires BOTH
 // the voice Tx mixer route AND a real in-call audio mode (VoWiFi-safe).
@@ -1369,20 +1822,103 @@ bool cvp_rebuild() {
 //  - no USB card (pure codec built-in<->analog transition) → HAMMER (restart audioserver → AHAL
 //    rebuilds the call routing cleanly → idle re-engages the codec flow). Proven for minijack.
 int main(int argc, char** argv) {
-    // Never let a typo/new probe flag silently start the audio-routing daemon.
+    if (argc == 5 && strcmp(argv[1], "--internal-cellular-agm") == 0) {
+        const std::string_view parent(argv[3]);
+        pid_t pid = 0;
+        const auto n = std::from_chars(parent.data(), parent.data() + parent.size(), pid);
+        if (n.ec != std::errc{} || n.ptr != parent.data() + parent.size() || pid <= 1 || getuid() != 0) return 2;
+        const std::string_view preset(argv[4]);
+        int64_t revision;
+        const auto rev = std::from_chars(preset.data(), preset.data() + preset.size(), revision);
+        if (rev.ec != std::errc{} || rev.ptr != preset.data() + preset.size()) return 2;
+        struct sigaction action{};
+        action.sa_handler = on_signal;
+        if (sigaction(SIGTERM, &action, nullptr) || sigaction(SIGINT, &action, nullptr) ||
+            prctl(PR_SET_PDEATHSIG, SIGTERM) || getppid() != pid) return 2;
+        prctl(PR_SET_NAME, "avcrtd-agm");
+        return avcrt::agm::run_cellular(argv[2], revision, [] { return g_run.load(); });
+    }
+#ifdef AVCRT_AGM_LAB
+    if (argc == 5 && strcmp(argv[1], "--agm-paths") == 0 && strcmp(argv[4], "--consent") == 0) {
+        const auto miid = [](std::string_view s, unsigned& out) {
+            if (s.substr(0, 2) == "0x") s.remove_prefix(2);
+            if (s.empty()) return false;
+            const auto r = std::from_chars(s.data(), s.data() + s.size(), out, 16);
+            return r.ec == std::errc{} && r.ptr == s.data() + s.size() && out;
+        };
+        unsigned codec_tx, encoder;
+        if (!miid(argv[2], codec_tx) || !miid(argv[3], encoder)) return 2;
+        return avcrt::agm::probe_paths(agm_stock_mic, codec_tx, encoder);
+    }
+    const bool tx_probe = argc == 4 && strcmp(argv[1], "--probe-agm-tx") == 0;
+    const bool tx_replace = argc == 5 && strcmp(argv[1], "--agm-replace-pcm") == 0 &&
+                            strcmp(argv[4], "--consent") == 0;
+    if (tx_probe || tx_replace) {
+        const std::string_view number(argv[3]);
+        unsigned aif = 0;
+        const auto r = std::from_chars(number.data(), number.data() + number.size(), aif);
+        if (r.ec != std::errc{} || r.ptr != number.data() + number.size() || !aif) return 2;
+        return avcrt::agm::run(tx_probe ? avcrt::agm::Probe::TxRoute : avcrt::agm::Probe::ReplacePcm,
+                               agm_stock_mic, argv[2], aif);
+    }
+#endif
     if (argc == 2) {
         if (strcmp(argv[1], "--unmute") == 0) return run_unmute();
         if (strcmp(argv[1], "--probe-kcontrol") == 0) return run_probe_kcontrol();
         if (strcmp(argv[1], "--probe-cvp") == 0) return run_probe_cvp();
         if (strcmp(argv[1], "--probe-voice-card") == 0) return find_voice_card(true) >= 0 ? 0 : 1;
+        if (strcmp(argv[1], "--probe-alsa") == 0) return probe_alsa(true);
         if (strcmp(argv[1], "--probe-capture") == 0) return run_probe_capture();
+#ifdef AVCRT_AGM_LAB
+        if (strcmp(argv[1], "--probe-agm") == 0)
+            return avcrt::agm::run(avcrt::agm::Probe::Capabilities, agm_stock_mic);
+        if (strcmp(argv[1], "--probe-agm-va") == 0)
+            return avcrt::agm::run(avcrt::agm::Probe::VaTags, agm_stock_mic);
+#endif
         if (strcmp(argv[1], "--list-probes") == 0) {
-            puts("--probe-kcontrol\n--probe-cvp\n--probe-voice-card\n--probe-capture");
+            puts("--probe-kcontrol\n--probe-cvp\n--probe-voice-card\n--probe-alsa\n--probe-capture");
+#ifdef AVCRT_AGM_LAB
+            puts("--probe-agm\n--probe-agm-va\n--probe-agm-tx BACKEND TX_AIF_NUMBER");
+#endif
             return 0;
         }
     }
+#ifdef AVCRT_AGM_LAB
+    if (argc == 3 && strcmp(argv[2], "--consent") == 0) {
+        if (strcmp(argv[1], "--agm-va-levels") == 0)
+            return avcrt::agm::run(avcrt::agm::Probe::VaLevels, agm_stock_mic);
+        if (strcmp(argv[1], "--agm-tone") == 0)
+            return avcrt::agm::run(avcrt::agm::Probe::Tone, agm_stock_mic);
+        if (strcmp(argv[1], "--agm-voice") == 0)
+            return avcrt::agm::run(avcrt::agm::Probe::Speech, agm_stock_mic);
+        if (strcmp(argv[1], "--agm-capture-levels") == 0)
+            return avcrt::agm::run(avcrt::agm::Probe::CaptureLevels, agm_stock_mic);
+        if (strcmp(argv[1], "--agm-capture-replay") == 0)
+            return avcrt::agm::run(avcrt::agm::Probe::CaptureReplay, agm_stock_mic);
+        if (strcmp(argv[1], "--agm-overlap-check") == 0)
+            return avcrt::agm::run(avcrt::agm::Probe::Overlap, agm_stock_mic);
+        if (strcmp(argv[1], "--agm-loopback-check") == 0)
+            return avcrt::agm::run(avcrt::agm::Probe::Calibrate, agm_stock_mic);
+        if (strcmp(argv[1], "--agm-realtime") == 0)
+            return avcrt::agm::run(avcrt::agm::Probe::Realtime, agm_stock_mic);
+        if (strcmp(argv[1], "--agm-live-pcm") == 0)
+            return avcrt::agm::run(avcrt::agm::Probe::LivePcm, agm_stock_mic);
+    }
+#endif
+    // Never let a typo or an unknown probe flag start the audio-routing daemon.
     if (argc != 1) {
-        fprintf(stderr, "Usage: %s [--unmute|--probe-kcontrol|--probe-cvp|--probe-voice-card|--probe-capture|--list-probes]\n", argv[0]);
+#ifdef AVCRT_AGM_LAB
+        fprintf(stderr, "Usage: %s [--unmute|--list-probes|--probe-*|--agm-tone --consent|"
+                        "--agm-voice --consent < voice.s16le|--agm-capture-levels --consent|"
+                        "--agm-capture-replay --consent|--agm-overlap-check --consent|"
+                        "--agm-loopback-check --consent|--agm-realtime --consent|--agm-va-levels --consent|"
+                        "--agm-live-pcm --consent|--probe-agm-tx BACKEND TX_AIF_NUMBER|"
+                        "--agm-replace-pcm BACKEND TX_AIF_NUMBER --consent (PCM pipe)|"
+                        "--agm-paths CODEC_TX_MIID ENCODER_MIID --consent (hex, no PCM)]\n", argv[0]);
+#else
+        fprintf(stderr, "Usage: %s [--unmute|--list-probes|--probe-kcontrol|--probe-cvp|"
+                        "--probe-voice-card|--probe-alsa|--probe-capture]\n", argv[0]);
+#endif
         return 2;
     }
 
@@ -1390,7 +1926,7 @@ int main(int argc, char** argv) {
     // → "cannot prepare channel" / "Bad address" → flap → torn audio. A second
     // instance (e.g. a supervisor respawn while the old one is still stuck in a
     // D-state pcm syscall) must NOT start. flock an exclusive lock; if held, exit.
-    int lock_fd = open("/data/local/tmp/avcrtd.lock", O_CREAT | O_RDWR, 0644);
+    int lock_fd = open("/data/local/tmp/avcrtd.lock", O_CREAT | O_RDWR | O_CLOEXEC, 0644);
     if (lock_fd >= 0 && flock(lock_fd, LOCK_EX | LOCK_NB) != 0) {
         fprintf(stderr, "[avcrtd] another instance is running — exiting\n");
         return 0;
@@ -1408,7 +1944,14 @@ int main(int argc, char** argv) {
     sigaction(SIGTERM, &sa, nullptr);
 
     resolve_cards();
-    if (!g_mixer) fprintf(stderr, "[avcrtd] cellular mixer not discovered yet; controls not probed\n");
+    if (!g_mixer) {
+        if (avcrt::agm::candidate())
+            fprintf(stderr, "[avcrtd] SPF call observer found; will check VA/AGM on active calls\n");
+        else {
+            fprintf(stderr, "[avcrtd] no supported cellular route selected; --probe-alsa lists other candidates\n");
+            probe_alsa(false);
+        }
+    }
 
     // GATING (per-flow, NOT a hard cellular kill-switch):
     //  - BUILT-IN mic GSM clean-replace needs the "AVCRT Dec Mute" kcontrol (AVCRT kernel patch).
@@ -1451,6 +1994,9 @@ int main(int argc, char** argv) {
     int  iters_since_check = 0;
     const int kCheckEvery = 30;          // re-check on/session every ~30 audio iters (~0.5s)
     using Clock = std::chrono::steady_clock;
+    const auto agm_now_ms = [] {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
+    };
     RouteSample observed;
     int failures = 0;
     int good_periods = 0;
@@ -1461,6 +2007,12 @@ int main(int argc, char** argv) {
     auto retry_at = Clock::time_point{};
     auto last_cvp = Clock::time_point{};
     auto next_preflight_log = Clock::time_point{};
+    pid_t agm_pid = -1;
+    avcrt::cellular::AgmAttempts agm_attempts;
+    avcrt::agm::MicProbe agm_mic;
+    auto agm_stop_at = Clock::time_point{};
+    auto agm_recent_call_until = Clock::time_point{};
+    std::string observed_usb_route;
 
     auto apply_preset = [&]() {
         avcrt::DspConfig ec = dc;
@@ -1603,6 +2155,77 @@ int main(int argc, char** argv) {
 
         // ---- idle: poll for (engine on && a supported call), then engage once ----
         bool on = engine_enabled(cfg, dc);
+        agm_mic.reap();
+        if (!on) {
+            agm_attempts.disable();
+            agm_recent_call_until = {};
+            observed_usb_route.clear();
+        }
+        if (agm_pid > 0) {
+            int status;
+            const auto wait = waitpid(agm_pid, &status, WNOHANG);
+            if (wait == agm_pid || (wait < 0 && errno == ECHILD)) {
+                using avcrt::agm::WorkerExit;
+                const int result = wait == agm_pid && WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+                using avcrt::cellular::AgmRecovery;
+                AgmRecovery recovery = AgmRecovery::None;
+                const char* reason = nullptr;
+                if (result == static_cast<int>(WorkerExit::ColdUplink)) {
+                    recovery = AgmRecovery::ColdUplink;
+                    reason = "no startup WRITE_DONE";
+                } else if (result == static_cast<int>(WorkerExit::Recoverable)) {
+                    recovery = AgmRecovery::Transient;
+                    reason = "transient live failure";
+                } else if (result == static_cast<int>(WorkerExit::LeaseLost)) {
+                    recovery = AgmRecovery::LeaseLost;
+                    reason = "TX lease cleared on unchanged ALSA route";
+                }
+                if (result == static_cast<int>(WorkerExit::MicWait)) {
+                    std::string generation;
+                    if (on && agm_stop_at == Clock::time_point{} && avcrt::agm::started_call(generation) &&
+                        agm_attempts.wait_for_mic(generation, agm_now_ms()))
+                        fprintf(stderr, "[avcrtd] AGM clean rollback; waiting for microphone permission on call %s\n",
+                                generation.c_str());
+                } else if (recovery != AgmRecovery::None) {
+                    std::string generation;
+                    bool usb_capture = false;
+                    if (on && agm_stop_at == Clock::time_point{} && avcrt::agm::started_call(generation, &usb_capture)) {
+                        const bool check_mic = usb_capture && recovery == AgmRecovery::LeaseLost;
+                        const int delay = agm_attempts.recover(generation, dc.revision, recovery, agm_now_ms(), check_mic);
+                        if (delay) fprintf(stderr, "[avcrtd] AGM clean rollback (%s); automatic recheck in %d ms for call %s%s\n",
+                                           check_mic ? "USB TX lease lost" : reason, delay, generation.c_str(),
+                                           check_mic ? "; waiting for microphone permission" : "");
+                        else if (recovery == AgmRecovery::LeaseLost && agm_attempts.same_call(generation))
+                            fprintf(stderr, "[avcrtd] AGM TX lease recovery rate limit reached; stock TX retained\n");
+                    }
+                } else if (result != static_cast<int>(WorkerExit::Stopped) && result != static_cast<int>(WorkerExit::Refused)) {
+                    const char* kind = wait != agm_pid ? "no wait status" : WIFSIGNALED(status) ? "signal" : "exit";
+                    const int code = wait != agm_pid ? 0 : WIFSIGNALED(status) ? WTERMSIG(status) : WEXITSTATUS(status);
+                    fprintf(stderr, "[avcrtd] AGM worker %s %d without verified cleanup; no more AGM attempts this run\n",
+                            kind, code);
+                    agm_attempts.quarantine();
+                }
+                agm_pid = -1;
+                agm_stop_at = {};
+            } else if (wait == 0) {
+                const auto now = Clock::now();
+                std::string generation;
+                if (agm_stop_at == Clock::time_point{} &&
+                    (!on || !avcrt::agm::started_call(generation) || !agm_attempts.same_call(generation))) {
+                    if (on) fprintf(stderr, "[avcrtd] AGM route no longer bound; stop worker at mono_ms=%lld\n",
+                                    static_cast<long long>(agm_now_ms()));
+                    kill(agm_pid, SIGTERM);
+                    agm_stop_at = now + std::chrono::milliseconds(1200);
+                } else if (agm_stop_at != Clock::time_point{} && now >= agm_stop_at) {
+                    fprintf(stderr, "[avcrtd] AGM worker stalled on shutdown; kernel TX lease expires\n");
+                    kill(-agm_pid, SIGKILL);
+                    agm_attempts.quarantine();
+                    agm_stop_at = Clock::time_point::max();
+                } else if (agm_stop_at == Clock::time_point{}) {
+                    agm_recent_call_until = now + std::chrono::seconds(1);
+                }
+            }
+        }
         if (!on || !is_in_call()) {
             observed = {};
             if (!on || ++off_polls >= 3) {
@@ -1621,11 +2244,76 @@ int main(int argc, char** argv) {
             sleep_ms(kIdlePollMs);
             continue;
         }
-        if (!on || !is_in_call() || bypass || g_codec_rollback_failed || Clock::now() < retry_at) {
-            sleep_ms(kIdlePollMs);
+        if (agm_pid > 0 || !on || bypass || g_codec_rollback_failed || Clock::now() < retry_at) {
+            sleep_ms(agm_pid > 0 ? kAgmHandoffPollMs : kIdlePollMs);
             continue;
         }
-        resolve_cards();
+        const bool legacy_call = is_in_call();
+        if (legacy_call) resolve_cards();
+        bool agm_bound = false, agm_mic_wait = false;
+        if (agm_attempts.may_discover(on, g_card >= 0)) {
+            std::string generation;
+            bool usb_capture = false;
+            const bool started = avcrt::agm::started_call(generation, &usb_capture);
+            if (usb_capture) {
+                agm_recent_call_until = Clock::now() + std::chrono::seconds(1);
+                if (observed_usb_route != generation) {
+                    observed_usb_route = generation;
+                    fprintf(stderr, "[avcrtd] AGM USB call %s identified for replacement\n",
+                            generation.c_str());
+                }
+            } else if (started) {
+                observed_usb_route.clear();
+            }
+            if (!started || !agm_attempts.same_call(generation)) agm_attempts.cancel_recovery();
+            if (started) {
+                if (!legacy_call) resolve_cards();
+                if (g_card >= 0) agm_attempts.cancel_recovery();
+                if (g_card < 0) {
+                    using avcrt::agm::MicStatus;
+                    agm_bound = true;
+                    agm_recent_call_until = Clock::now() + std::chrono::seconds(1);
+                    const bool waiting = agm_attempts.waiting_for_mic(generation);
+                    agm_mic_wait = waiting;
+                    auto mic = MicStatus::Unavailable;
+                    bool eligible = g_run.load();
+                    const auto mic_started = agm_now_ms();
+                    if (eligible && waiting && agm_attempts.mic_check_due(generation, mic_started)) {
+                        mic = agm_mic.sample(false);
+                        if (mic == MicStatus::Clear) {
+                            // Don't launch based on a call, app or priority snapshot
+                            // from before the blocking read-only microphone query.
+                            std::string after;
+                            on = engine_enabled(cfg, dc);
+                            if (!on) agm_attempts.disable();
+                            eligible = g_run.load() && on && avcrt::agm::started_call(after) && after == generation;
+                            if (eligible) {
+                                resolve_cards();
+                                eligible = g_card < 0;
+                            }
+                            if (!eligible) agm_attempts.cancel_recovery();
+                            else mic = avcrt::agm::MicPoll::status(mic_started, agm_now_ms());
+                        }
+                    }
+                    if (eligible && agm_attempts.begin(generation, dc.revision, agm_now_ms(), mic)) {
+                        agm_pid = start_agm_worker(generation, dc.revision);
+                        if (agm_pid < 0) fprintf(stderr, "[avcrtd] could not start AGM worker; stock TX unchanged\n");
+                        else fprintf(stderr, "[avcrtd] AGM worker started call %s at mono_ms=%lld%s\n", generation.c_str(),
+                                     static_cast<long long>(agm_now_ms()), waiting ? " after microphone clear" : "");
+                    }
+                }
+            }
+        } else {
+            agm_attempts.cancel_recovery();
+        }
+        if (!on || agm_pid > 0 || agm_attempts.pending() || !legacy_call) {
+            const bool handoff = on && !agm_bound && agm_attempts.may_discover(on, g_card >= 0) &&
+                Clock::now() < agm_recent_call_until;
+            const int interval = agm_pid > 0 || handoff ? kAgmHandoffPollMs :
+                agm_attempts.pending() || (on && agm_mic_wait) ? kAgmWatchMs : kIdlePollMs;
+            sleep_ms(interval);
+            continue;
+        }
         RouteSample current = sample_route();
         if (current.mode == MODE_NONE || !(current == observed)) {
             observed = current;
@@ -1683,6 +2371,7 @@ int main(int argc, char** argv) {
         iters_since_check = 0;
     }
 
+    if (!stop_agm_worker(agm_pid)) fprintf(stderr, "[avcrtd] AGM shutdown incomplete; kernel TX lease expires\n");
     disengage(s);
     if (mon_ok) pthread_join(mon, nullptr);
     if (afmon_ok) pthread_join(afmon, nullptr);

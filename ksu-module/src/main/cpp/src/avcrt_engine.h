@@ -38,9 +38,13 @@ public:
      *  last call. Cheap to call every process(). */
     void update(const DspConfig& cfg);
 
+    /** Discard queued pitch output after a discontinuity in live capture. */
+    void discardPendingVoice();
+
     /** Processes a frame of S16LE PCM in-place. Returns false if the engine
-     *  is disabled / unconfigured (caller should pass through). */
-    bool process(int16_t* samples, size_t frames);
+     *  is disabled / unconfigured (caller should pass through). When requested,
+     *  full_voice distinguishes processed voice PCM from warm-up/underrun silence. */
+    bool process(int16_t* samples, size_t frames, bool* full_voice = nullptr);
 
     bool voiceBypassed() const { return active_cfg_.bypass_voice; }
     void mixSound(float* samples, size_t frames);

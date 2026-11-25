@@ -30,6 +30,17 @@ clang-r547379/
 # Native build artifacts
 **/.cxx/
 **/cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+_deps/
+/out/
+/dist/
+/artifacts/
+*.ko
+*.img
+*.apk.sha256
+*.zip.sha256
+build-artifacts.sha256
 
 # Bundled module artifacts (generated at build time)
 app/src/main/assets/avcrt-module.zip
@@ -52,6 +63,10 @@ venv/
 /ksu-module/src/test/
 /ksu-module/src/source-rom/
 /ksu-module/src/stagefright-probe/
+/ksu-module/src/main/cpp/daemon/avcrt_agm_*_lab_main.cpp
+/ksu-module/src/main/cpp/daemon/avcrt_agm_loopback.h
+/ksu-module/src/main/cpp/daemon/avcrt_agm_overlap.h
+/ksu-module/src/main/cpp/daemon/avcrt_live_pcm.h
 
 # Generated native/Java artifacts (keep source and checked-in wrapper JARs).
 *.class

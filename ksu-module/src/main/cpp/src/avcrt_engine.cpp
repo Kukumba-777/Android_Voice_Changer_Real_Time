@@ -39,9 +39,13 @@ void Engine::update(const DspConfig& cfg) {
     rebuild();
 }
 
-void Engine::rebuild() {
+void Engine::discardPendingVoice() {
     st_->clear();
     fifo_.clear();
+}
+
+void Engine::rebuild() {
+    discardPendingVoice();
     st_->setSampleRate(sample_rate_);
     st_->setChannels(channels_);
 
@@ -86,11 +90,16 @@ void Engine::rebuild() {
            active_cfg_.echo.enabled, active_cfg_.reverb.enabled);
 }
 
-bool Engine::process(int16_t* samples, size_t frames) {
+bool Engine::process(int16_t* samples, size_t frames, bool* full_voice) {
+    if (full_voice) *full_voice = false;
     if (!active_cfg_.enabled || !st_) return false;
     if (frames == 0) return true;
     if (voiceBypassed()) {
         mixSound(samples, frames);
+        // Bypass is an intentional, complete source block (possibly with the
+        // soundboard mixed in), not a SoundTouch warm-up/underrun. Live uplink
+        // callers use this flag to avoid muting the stock mic on empty DSP FIFO.
+        if (full_voice) *full_voice = true;
         return true;
     }
 
@@ -125,6 +134,7 @@ bool Engine::process(int16_t* samples, size_t frames) {
     // for THIS period — no "prefill" latch (that starved the continuous cellular feed). We STILL
     // run post-effects on the silence so time-based tails (echo/reverb) keep ringing.
     if (fifo_.size() >= total) {
+        if (full_voice) *full_voice = true;
         std::memcpy(out_.data(), fifo_.data(), total * sizeof(float));
         fifo_.erase(fifo_.begin(), fifo_.begin() + total);
     } else {

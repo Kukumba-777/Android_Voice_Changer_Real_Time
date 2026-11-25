@@ -20,8 +20,8 @@ versionName = "0.3.2"
 # KSU module identity (also written into module.prop at build time)
 moduleId = "avcrt"
 moduleName = "AVCRT Voice Changer"
-moduleVersion = "0.4.9-soundboard"
-moduleVersionCode = "13"
+moduleVersion = "0.4.11-cellular-preview"
+moduleVersionCode = "16"
 moduleAuthor = "AVCRT"
 moduleDescription = "Real-time voice DSP for compatible app capture via Zygisk, with a separate device-dependent cellular backend."
 

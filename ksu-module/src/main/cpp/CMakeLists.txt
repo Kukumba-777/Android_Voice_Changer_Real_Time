@@ -1,9 +1,38 @@
 cmake_minimum_required(VERSION 3.22.1)
 project(avcrtfx LANGUAGES C CXX)
 
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Offline tests configure without the NDK, device access or fetching dependencies.
+if(NOT ANDROID)
+    if(BUILD_TESTING)
+        function(avcrt_host_test name source)
+            add_executable(${name} "${CMAKE_CURRENT_SOURCE_DIR}/../../../tests/${source}")
+            target_include_directories(${name} PRIVATE daemon src)
+            target_compile_options(${name} PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+            add_test(NAME ${name} COMMAND ${name})
+        endfunction()
+        avcrt_host_test(cellular_backend_fail_safe cellular_backend_test.cpp)
+        avcrt_host_test(agm_path_reply agm_path_test.cpp)
+        avcrt_host_test(soundboard_mix soundboard_test.cpp)
+        set(AVCRT_HOST_SOUNDTOUCH_SOURCE_DIR "" CACHE PATH "Local SoundTouch 2.3.3 source for the host Engine test")
+        if(AVCRT_HOST_SOUNDTOUCH_SOURCE_DIR)
+            find_package(Threads REQUIRED)
+            set(SOUNDSTRETCH OFF)
+            set(INTEGER_SAMPLES OFF)
+            add_subdirectory("${AVCRT_HOST_SOUNDTOUCH_SOURCE_DIR}" soundtouch EXCLUDE_FROM_ALL)
+            avcrt_host_test(cellular_engine cellular_engine_test.cpp)
+            target_sources(cellular_engine PRIVATE src/avcrt_engine.cpp)
+            target_compile_definitions(cellular_engine PRIVATE AVCRT_HOST_LOCAL_SOUNDBOARD=1)
+            target_link_libraries(cellular_engine PRIVATE SoundTouch Threads::Threads)
+        endif()
+    endif()
+    return()
+endif()
 
 # -------------------------------------------------------------------
 # Third-party deps fetched on first build into ${CMAKE_BINARY_DIR}/_deps
@@ -109,12 +138,14 @@ target_link_options(avcrtfx PRIVATE
 # -------------------------------------------------------------------
 add_executable(avcrtd
         daemon/avcrtd.cpp
+        daemon/avcrt_agm.cpp
         src/avcrt_engine.cpp
         src/avcrt_config.cpp
         src/avcrt_log.cpp
 )
 target_include_directories(avcrtd PRIVATE src)
 target_link_libraries(avcrtd PRIVATE
+        dl
         log
         SoundTouch
         nlohmann_json::nlohmann_json
